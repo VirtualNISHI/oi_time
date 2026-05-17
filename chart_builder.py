@@ -84,20 +84,25 @@ def _fmt_btc(x: float) -> str:
     return f"{x:,.0f}"
 
 
-def _compute_oi_summary(hours: float, since_ms: int) -> tuple[float, float]:
-    """Return (latest_total_oi_btc, pct_change_over_window)."""
+def _compute_oi_summary(hours: float, since_ms: int) -> tuple[float | None, float | None]:
+    """Return (latest_total_oi_btc, pct_change_over_window).
+
+    Returns (None, None) when the data is unavailable. Callers must format
+    these distinctly from a real zero so users don't see "OI 0 BTC" on
+    transient API failures (Codex review #1).
+    """
     try:
         oi_data = fetch_aggregated_oi(hours=hours, period="1h")
     except Exception as e:
         log.warning("OI fetch failed (non-fatal, no chart impact): %s", e)
-        return 0.0, 0.0
+        return None, None
     totals: dict[int, float] = {}
     for pts in oi_data.values():
         for p in pts:
             if p.ts_ms >= since_ms:
                 totals[p.ts_ms] = totals.get(p.ts_ms, 0.0) + p.oi_btc
     if not totals:
-        return 0.0, 0.0
+        return None, None
     series = [totals[t] for t in sorted(totals)]
     latest = series[-1]
     pct = (series[-1] - series[0]) / series[0] * 100 if series[0] > 0 else 0.0
@@ -143,13 +148,19 @@ def build_chart(
 
     liq_short = np.zeros(n_bins)  # short liquidated → buys at that price
     liq_long = np.zeros(n_bins)   # long  liquidated → sells at that price
+    _liq_unknown = 0
     for l in liqs:
         idx = np.searchsorted(bins, l.price, side="right") - 1
         if 0 <= idx < n_bins:
             if l.side == "short":
                 liq_short[idx] += l.qty_btc
-            else:
+            elif l.side == "long":
                 liq_long[idx] += l.qty_btc
+            else:
+                # Unexpected side — log explicitly rather than silently misbucket (Codex review #2)
+                _liq_unknown += 1
+    if _liq_unknown:
+        log.warning("dropped %d liquidations with unknown side", _liq_unknown)
 
     total_vol_buy = float(vol_buy.sum())
     total_vol_sell = float(vol_sell.sum())
@@ -273,10 +284,16 @@ def build_chart(
     )
 
     # ---- Stats (top-right corner) ----
+    oi_total_str = f"{oi_total:>10,.0f} BTC" if oi_total is not None else "         n/a"
+    oi_chg_str = (
+        f"{('+' if oi_chg >= 0 else '')}{oi_chg:>5.2f}%"
+        if oi_chg is not None else "    n/a"
+    )
+    oi_window_label = f"Δ{int(lookback_hours)}h" if lookback_hours != 24 else "Δ24h"
     stats_lines = [
         f"Mark      {mark:>10,.0f}",
-        f"OI        {oi_total:>10,.0f} BTC",
-        f"OI Δ24h   {('+' if oi_chg >= 0 else '')}{oi_chg:>5.2f}%",
+        f"OI        {oi_total_str}",
+        f"OI {oi_window_label:<6}{oi_chg_str:>11}",
     ]
     fig.text(
         0.96, 0.944, "\n".join(stats_lines),
@@ -318,8 +335,9 @@ def build_chart(
         "total_vol_sell_btc": total_vol_sell,
         "total_liq_short_btc": total_liq_short,
         "total_liq_long_btc": total_liq_long,
-        "oi_total_btc": oi_total,
-        "oi_change_pct_24h": oi_chg,
+        "oi_total_btc": oi_total,           # None if API unavailable
+        "oi_change_pct_24h": oi_chg,        # None if API unavailable
+        "oi_lookback_hours": lookback_hours,  # window the oi_change actually covers
         "generated_at": now.isoformat(),
     }
 

@@ -101,10 +101,13 @@ def format_text(template: str, meta: dict | None, commentary: str | None = None)
         "vol_sell": f"{meta.get('total_vol_sell_btc', 0):,.0f}" if meta else "",
         "liq_short": f"{meta.get('total_liq_short_btc', 0):,.0f}" if meta else "",
         "liq_long": f"{meta.get('total_liq_long_btc', 0):,.0f}" if meta else "",
-        "oi": f"{meta.get('oi_total_btc', 0):,.0f}" if meta else "",
+        "oi": (
+            f"{meta['oi_total_btc']:,.0f}"
+            if meta and meta.get("oi_total_btc") is not None else "n/a"
+        ),
         "oi_chg": (
-            f"{'+' if meta.get('oi_change_pct_24h', 0) >= 0 else ''}{meta.get('oi_change_pct_24h', 0):.2f}%"
-            if meta else ""
+            f"{'+' if meta['oi_change_pct_24h'] >= 0 else ''}{meta['oi_change_pct_24h']:.2f}%"
+            if meta and meta.get("oi_change_pct_24h") is not None else "n/a"
         ),
         "commentary": commentary or "",
     }
