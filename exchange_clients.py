@@ -228,6 +228,94 @@ def fetch_aggregated_oi(hours: float = 24.0, period: str = "1h") -> dict[str, li
     return result
 
 
+# ---------------- estimated OI delta by price ----------------
+
+@dataclass
+class OIDeltaBucket:
+    """Estimated OI change attributed to a price bucket within a sub-window.
+
+    `oi_delta_btc` is positive when net OI grew during that sub-window
+    (new positions opened), negative when net OI shrank (positions closed
+    or liquidated). Sign-by-price is an *estimate*: it assumes the dOI in
+    the parent 1h bucket distributes across price proportionally to the
+    intra-window taker-aware volume share.
+    """
+    ts_ms: int            # mid-timestamp of the underlying fine bucket
+    price: float          # typical price of the fine bucket
+    oi_delta_btc: float
+
+
+def compute_oi_delta_profile(
+    hours: float = 24.0,
+    fine_interval_min: int = 5,
+    oi_interval_min: int = 60,
+) -> list[OIDeltaBucket]:
+    """Return per-(time × price) estimated OI delta for the lookback window.
+
+    Strategy:
+      1. Pull OI history at `oi_interval_min` (default 1h) — gives dOI per hour
+         summed across 3 exchanges.
+      2. Pull aggregate 5min volume buckets — gives price + volume per 5min.
+      3. For each 1h parent bucket, attribute its dOI to the 12 child 5min
+         buckets proportionally to each child's share of the hour's volume.
+
+    This is a heuristic. We do NOT claim accuracy; the chart layer must
+    label it as estimated.
+    """
+    # 1. fetch hourly OI per exchange and sum to a single total series
+    oi_data = fetch_aggregated_oi(hours=hours + 1, period="1h")
+    by_ts: dict[int, float] = {}
+    for pts in oi_data.values():
+        for p in pts:
+            by_ts[p.ts_ms] = by_ts.get(p.ts_ms, 0.0) + p.oi_btc
+    if len(by_ts) < 2:
+        log.warning("OI delta: insufficient OI samples (%d), skipping", len(by_ts))
+        return []
+    oi_sorted_ts = sorted(by_ts)
+    # dOI[ts] = OI[ts] - OI[prev]; assigned to the hour ENDING at ts.
+    doi_at_hour: dict[int, float] = {}
+    for i in range(1, len(oi_sorted_ts)):
+        doi_at_hour[oi_sorted_ts[i]] = by_ts[oi_sorted_ts[i]] - by_ts[oi_sorted_ts[i - 1]]
+
+    # 2. fetch fine-grained volume buckets across the window
+    fine = aggregate_volume_profile(hours=hours, interval_min=fine_interval_min)
+    if not fine:
+        return []
+
+    # 3. attribute dOI to each fine bucket.
+    # Parent hour = first OI sample whose ts >= fine_bucket.ts_ms_end.
+    hour_ms = oi_interval_min * 60 * 1000
+    # Group fine buckets by which parent-hour they fall into.
+    fine_by_parent: dict[int, list] = {}
+    for b in fine:
+        # Pick the smallest oi-hour-end timestamp >= bucket end
+        end = b.ts_ms + fine_interval_min * 60 * 1000
+        parent = next((t for t in oi_sorted_ts if t >= end), None)
+        if parent is None:
+            continue
+        fine_by_parent.setdefault(parent, []).append(b)
+
+    out: list[OIDeltaBucket] = []
+    for parent_ts, children in fine_by_parent.items():
+        doi = doi_at_hour.get(parent_ts)
+        if doi is None or doi == 0:
+            continue
+        total_vol = sum(c.buy_btc + c.sell_btc for c in children)
+        if total_vol <= 0:
+            continue
+        for c in children:
+            share = (c.buy_btc + c.sell_btc) / total_vol
+            out.append(OIDeltaBucket(
+                ts_ms=c.ts_ms,
+                price=c.price,
+                oi_delta_btc=doi * share,
+            ))
+
+    log.info("OI-delta estimate: %d fine buckets across %d parent hours",
+             len(out), len(fine_by_parent))
+    return out
+
+
 # ---------------- liquidations ----------------
 
 def fetch_all_liquidations(since_ms: int, interval_min: int = 60) -> list[Liquidation]:

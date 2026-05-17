@@ -20,6 +20,7 @@ import numpy as np  # noqa: E402
 
 from exchange_clients import (  # noqa: E402
     aggregate_volume_profile,
+    compute_oi_delta_profile,
     fetch_aggregated_oi,
     fetch_all_liquidations,
     get_mark_price,
@@ -41,7 +42,10 @@ C_BUY    = "#26A69A"   # TV green (taker buys)
 C_SELL   = "#EF5350"   # TV red   (taker sells)
 C_LIQ_S  = "#5DADE2"   # short-liq accent (cool blue, buy-side)
 C_LIQ_L  = "#F5B041"   # long-liq accent  (warm amber, sell-side)
+C_OI_UP  = "#8EBE9B"   # est. OI new — pale green
+C_OI_DN  = "#BE8E97"   # est. OI close — pale rose
 BAR_ALPHA = 0.85
+OI_ALPHA  = 0.55
 
 
 def setup_logging() -> None:
@@ -167,6 +171,25 @@ def build_chart(
     total_liq_short = float(liq_short.sum())
     total_liq_long = float(liq_long.sum())
 
+    # ---- OI delta profile (M2 — heuristic estimate) ----
+    try:
+        oi_delta = compute_oi_delta_profile(hours=lookback_hours, fine_interval_min=5)
+    except Exception as e:
+        log.warning("OI delta profile failed (non-fatal): %s", e)
+        oi_delta = []
+    oi_delta = [d for d in oi_delta if p_low <= d.price <= p_high]
+    oi_up = np.zeros(n_bins)   # est. new OI (dOI > 0)
+    oi_dn = np.zeros(n_bins)   # est. closed/liquidated OI (dOI < 0, stored as positive)
+    for d in oi_delta:
+        idx = np.searchsorted(bins, d.price, side="right") - 1
+        if 0 <= idx < n_bins:
+            if d.oi_delta_btc > 0:
+                oi_up[idx] += d.oi_delta_btc
+            else:
+                oi_dn[idx] += -d.oi_delta_btc
+    total_oi_up = float(oi_up.sum())
+    total_oi_dn = float(oi_dn.sum())
+
     # ---- OI summary (text-only — never plotted) ----
     oi_total, oi_chg = _compute_oi_summary(lookback_hours, since_ms)
 
@@ -184,6 +207,32 @@ def build_chart(
     ax.set_facecolor(BG)  # no contrast box — flat canvas like TV
 
     bar_h = (bins[1] - bins[0]) * 0.78  # slight gap between bars
+
+    # ---- OI delta layer (estimated) — drawn first / behind, hatched ----
+    # Scale: the dOI magnitudes are typically much smaller than trade volume
+    # (a few hundred BTC vs tens of thousands). Show on a separate scale by
+    # placing as a thin outer fringe BEYOND the vol bars in axes-fraction.
+    # Approach: use a half-height bar to the OUTSIDE of buy/sell volume.
+    oi_bar_h = bar_h * 0.40
+    oi_offset_y = bar_h * 0.30  # slight vertical offset so layers are distinguishable
+    if oi_up.max() > 0 or oi_dn.max() > 0:
+        # Normalize OI delta to ~30% of the volume xlim for visual readability
+        vol_max = max(float((vol_buy + liq_short).max() if len(vol_buy) else 1),
+                      float((vol_sell + liq_long).max() if len(vol_sell) else 1), 1.0)
+        oi_max = max(oi_up.max(), oi_dn.max(), 1e-9)
+        oi_scale = (vol_max * 0.30) / oi_max
+        # dOI > 0 (new OI) — pale green, hatched, RIGHT side
+        ax.barh(centers + oi_offset_y, oi_up * oi_scale,
+                height=oi_bar_h, left=vol_buy,
+                color=C_OI_UP, alpha=OI_ALPHA, hatch="///",
+                edgecolor=C_OI_UP, linewidth=0.0,
+                label="est. OI new (dOI>0)")
+        # dOI < 0 (closed OI) — pale rose, hatched, LEFT side
+        ax.barh(centers + oi_offset_y, -oi_dn * oi_scale,
+                height=oi_bar_h, left=-vol_sell,
+                color=C_OI_DN, alpha=OI_ALPHA, hatch="\\\\\\",
+                edgecolor=C_OI_DN, linewidth=0.0,
+                label="est. OI close (dOI<0)")
 
     # Volume profile — sells left, buys right
     ax.barh(centers,  vol_buy,  height=bar_h, color=C_BUY,  alpha=BAR_ALPHA,
@@ -282,6 +331,11 @@ def build_chart(
         f"{now_jst.strftime('%Y-%m-%d %H:%M')} JST",
         color=DIM, fontsize=9, ha="left",
     )
+    fig.text(
+        0.10, 0.913,
+        "Hatched layers = estimated OI delta (dOI distributed across price by intra-hour volume share).",
+        color=DIM, fontsize=8, ha="left", style="italic",
+    )
 
     # ---- Stats (top-right corner) ----
     oi_total_str = f"{oi_total:>10,.0f} BTC" if oi_total is not None else "         n/a"
@@ -301,20 +355,20 @@ def build_chart(
         family="monospace",
     )
 
-    # ---- Footer: volume + liquidation totals ----
+    # ---- Footer: volume + liquidation + OI delta totals ----
     vb_pct = (total_vol_buy / (total_vol_buy + total_vol_sell) * 100
               if (total_vol_buy + total_vol_sell) > 0 else 50)
     footer = (
-        f"Vol  {total_vol_buy:,.0f} buy / {total_vol_sell:,.0f} sell  "
-        f"({vb_pct:.1f}% buy)        "
-        f"Liq  {total_liq_short:,.0f} short / {total_liq_long:,.0f} long"
+        f"Vol  {total_vol_buy:,.0f}b / {total_vol_sell:,.0f}s  ({vb_pct:.1f}% buy)   "
+        f"Liq  {total_liq_short:,.0f}s / {total_liq_long:,.0f}l   "
+        f"est.OI  +{total_oi_up:,.0f} / -{total_oi_dn:,.0f}"
     )
     fig.text(0.5, 0.025, footer, color=DIM, fontsize=9, ha="center", family="monospace")
 
-    # ---- Legend: top-left of axes, no frame, 2 cols ----
+    # ---- Legend: top-left of axes, no frame, 3 cols (6 items) ----
     leg = ax.legend(
         loc="upper left",
-        ncol=2, fontsize=8, frameon=False,
+        ncol=3, fontsize=8, frameon=False,
         labelcolor=DIM, handlelength=1.2, handletextpad=0.4, columnspacing=1.2,
     )
     for txt in leg.get_texts():
@@ -338,6 +392,8 @@ def build_chart(
         "oi_total_btc": oi_total,           # None if API unavailable
         "oi_change_pct_24h": oi_chg,        # None if API unavailable
         "oi_lookback_hours": lookback_hours,  # window the oi_change actually covers
+        "est_oi_new_btc": total_oi_up,      # heuristic: positive dOI distributed by vol share
+        "est_oi_close_btc": total_oi_dn,    # heuristic: negative dOI distributed by vol share
         "generated_at": now.isoformat(),
     }
 
