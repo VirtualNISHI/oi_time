@@ -218,7 +218,7 @@ def build_chart(
     now_jst = now.astimezone(JST)
     title = f"BTC Volume Profile & Liquidations — last {int(lookback_hours)}h"
     subtitle = (
-        f"Trades: Binance + Bybit + OKX  |  Liquidations: OKX  "
+        f"Binance + Bybit + OKX (via Coinalyze)  "
         f"|  {now_jst.strftime('%Y-%m-%d %H:%M')} JST"
     )
     fig.suptitle(title, color=TEXT, fontsize=14, fontweight="bold", y=0.96)
@@ -308,6 +308,12 @@ def main() -> int:
     args = parser.parse_args()
 
     setup_logging()
+    # Load .env so COINALYZE_API_KEY etc. are available when run standalone
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).parent / ".env")
+    except ImportError:
+        pass
     meta = build_chart(
         args.output.resolve(),
         lookback_hours=args.lookback_hours,

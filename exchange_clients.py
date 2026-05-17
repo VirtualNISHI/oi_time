@@ -1,408 +1,295 @@
-"""Fetch BTC perp klines + liquidations from Binance, Bybit, OKX (public REST)."""
+"""Fetch BTC perp data via Coinalyze API (single endpoint, multi-exchange).
+
+Why Coinalyze instead of direct exchange APIs:
+  GitHub Actions runners use US-based Azure IPs, which are blocked by
+  Binance (451) and Bybit (403). Coinalyze is a paid aggregator that
+  fetches & normalizes data from all major exchanges, accessible from
+  anywhere via a single API key. The free tier (40 req/min) is plenty
+  for our 6-hour cron.
+
+  Pattern + key reused from sister project Perp-oi-chart.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any
 
 import requests
 
 log = logging.getLogger(__name__)
 
-TIMEOUT = 15
+BASE = "https://api.coinalyze.net/v1"
+TIMEOUT = 25
 
-BINANCE_SYMBOL = "BTCUSDT"
-BYBIT_SYMBOL = "BTCUSDT"
-OKX_INST = "BTC-USDT-SWAP"
-OKX_CONTRACT_SIZE_BTC = 0.01  # 1 contract = 0.01 BTC on BTC-USDT-SWAP
+# BTC perpetuals (USDT-margined) on the 3 target exchanges.
+# All have has_buy_sell_data=true and oi_lq_vol_denominated_in=BASE_ASSET (BTC).
+SYMBOLS = {
+    "binance": "BTCUSDT_PERP.A",
+    "bybit":   "BTCUSDT.6",
+    "okx":     "BTCUSDT_PERP.3",
+}
 
 
-@dataclass
-class Candle:
-    ts_ms: int          # open time
-    open: float
-    high: float
-    low: float
-    close: float
-    volume_btc: float
-    taker_buy_btc: float | None = None   # taker buy base-asset volume (None if not provided)
-    exchange: str = ""
+class CoinalyzeError(RuntimeError):
+    pass
 
-    @property
-    def typical(self) -> float:
-        return (self.high + self.low + self.close) / 3
 
+def _key() -> str:
+    k = os.environ.get("COINALYZE_API_KEY", "").strip()
+    if not k:
+        raise CoinalyzeError("COINALYZE_API_KEY is not set")
+    return k
+
+
+def _get(path: str, params: dict[str, Any] | None = None, *, retries: int = 3) -> Any:
+    params = dict(params or {})
+    headers = {"api_key": _key()}
+    url = f"{BASE}{path}"
+    last_err = "no attempts"
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            last_err = f"request error: {e}"
+            time.sleep(1 + attempt)
+            continue
+        if r.status_code == 429:
+            try:
+                wait = float(r.headers.get("Retry-After", "0") or "0")
+            except ValueError:
+                wait = 0.0
+            wait = max(wait, 5.0 * (attempt + 1))
+            log.warning("coinalyze 429, waiting %.1fs", wait)
+            time.sleep(wait + 0.5)
+            continue
+        if r.status_code >= 400:
+            raise CoinalyzeError(f"GET {path} returned {r.status_code}: {r.text[:300]}")
+        try:
+            return r.json()
+        except ValueError as e:
+            last_err = f"non-JSON: {e}: {r.text[:200]}"
+            time.sleep(1 + attempt)
+    raise CoinalyzeError(f"GET {path} failed after {retries} attempts: {last_err}")
+
+
+# ---------------- domain dataclasses ----------------
 
 @dataclass
 class VolBucket:
-    """One time bucket (e.g. 5min) with synthesized buy/sell split."""
+    """One time bucket aggregated across exchanges."""
     ts_ms: int
-    price: float          # typical price
+    price: float          # typical (HLC/3), volume-weighted across exchanges
     buy_btc: float
     sell_btc: float
 
 
 @dataclass
 class Liquidation:
+    """One time-bucket aggregated liquidation entry (not individual fill)."""
     ts_ms: int
     price: float
     qty_btc: float
-    side: str             # "long" or "short" — the side that was liquidated
+    side: str             # "long" or "short"
+    exchange: str
+
+
+@dataclass
+class OIPoint:
+    ts_ms: int
+    oi_btc: float
     exchange: str
 
 
 # ---------------- mark price (current) ----------------
 
 def get_mark_price() -> float:
-    """Median mark price across Binance/Bybit/OKX. Returns first successful if others fail."""
-    prices: list[float] = []
-
-    try:
-        r = requests.get(
-            "https://fapi.binance.com/fapi/v1/premiumIndex",
-            params={"symbol": BINANCE_SYMBOL}, timeout=TIMEOUT,
-        )
-        r.raise_for_status()
-        prices.append(float(r.json()["markPrice"]))
-    except Exception as e:
-        log.warning("binance markPrice failed: %s", e)
-
-    try:
-        r = requests.get(
-            "https://api.bybit.com/v5/market/tickers",
-            params={"category": "linear", "symbol": BYBIT_SYMBOL}, timeout=TIMEOUT,
-        )
-        r.raise_for_status()
-        prices.append(float(r.json()["result"]["list"][0]["markPrice"]))
-    except Exception as e:
-        log.warning("bybit markPrice failed: %s", e)
-
-    try:
-        r = requests.get(
-            "https://www.okx.com/api/v5/public/mark-price",
-            params={"instId": OKX_INST, "instType": "SWAP"}, timeout=TIMEOUT,
-        )
-        r.raise_for_status()
-        prices.append(float(r.json()["data"][0]["markPx"]))
-    except Exception as e:
-        log.warning("okx markPrice failed: %s", e)
-
-    if not prices:
-        raise RuntimeError("All mark-price sources failed")
-    prices.sort()
-    return prices[len(prices) // 2]
-
-
-# ---------------- klines (per-exchange) ----------------
-
-def fetch_binance_klines(interval: str = "5m", hours: float = 24.0) -> list[Candle]:
-    """Binance fapi klines. interval = '1m'|'3m'|'5m'|'15m'|'1h'... limit max 1500."""
-    minutes_per = int(interval.rstrip("mh")) * (60 if interval.endswith("h") else 1)
-    limit = min(1500, max(1, int((hours * 60) / minutes_per) + 1))
-    r = requests.get(
-        "https://fapi.binance.com/fapi/v1/klines",
-        params={"symbol": BINANCE_SYMBOL, "interval": interval, "limit": limit},
-        timeout=TIMEOUT,
+    """Most-recent close across our 3 symbols, median."""
+    now_s = int(time.time())
+    data = _get(
+        "/ohlcv-history",
+        {
+            "symbols": ",".join(SYMBOLS.values()),
+            "interval": "1min",
+            "from": now_s - 600,
+            "to": now_s,
+        },
     )
-    r.raise_for_status()
-    out: list[Candle] = []
-    for k in r.json():
-        out.append(Candle(
-            ts_ms=int(k[0]),
-            open=float(k[1]), high=float(k[2]), low=float(k[3]), close=float(k[4]),
-            volume_btc=float(k[5]),
-            taker_buy_btc=float(k[9]),  # takerBuyBaseAssetVolume
-            exchange="binance",
-        ))
-    return out
+    closes = []
+    for series in data:
+        hist = series.get("history") or []
+        if hist:
+            closes.append(float(hist[-1]["c"]))
+    if not closes:
+        raise CoinalyzeError("get_mark_price: no closes returned")
+    closes.sort()
+    return closes[len(closes) // 2]
 
 
-def fetch_bybit_klines(interval: str = "5", hours: float = 24.0) -> list[Candle]:
-    """Bybit V5 kline. interval in minutes as string: '1','3','5','15','30','60','120','240','D'."""
-    try:
-        per = int(interval)
-    except ValueError:
-        per = 60  # fallback for 'D' etc.
-    limit = min(1000, max(1, int((hours * 60) / per) + 1))
-    r = requests.get(
-        "https://api.bybit.com/v5/market/kline",
-        params={"category": "linear", "symbol": BYBIT_SYMBOL,
-                "interval": interval, "limit": limit},
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-    out: list[Candle] = []
-    for k in r.json().get("result", {}).get("list", []):
-        # bybit returns newest first
-        out.append(Candle(
-            ts_ms=int(k[0]),
-            open=float(k[1]), high=float(k[2]), low=float(k[3]), close=float(k[4]),
-            volume_btc=float(k[5]),
-            exchange="bybit",
-        ))
-    out.sort(key=lambda c: c.ts_ms)
-    return out
+# ---------------- volume profile ----------------
 
-
-def fetch_okx_klines(bar: str = "5m", hours: float = 24.0) -> list[Candle]:
-    """OKX candles. bar = '1m'|'3m'|'5m'|'15m'... limit max 300."""
-    per = int(bar.rstrip("mh")) * (60 if bar.endswith("h") else 1)
-    limit = min(300, max(1, int((hours * 60) / per) + 1))
-    r = requests.get(
-        "https://www.okx.com/api/v5/market/candles",
-        params={"instId": OKX_INST, "bar": bar, "limit": limit},
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-    out: list[Candle] = []
-    for k in r.json().get("data", []):
-        # OKX: [ts, o, h, l, c, vol(contracts), volCcy(BTC), volCcyQuote(USDT), confirm]
-        out.append(Candle(
-            ts_ms=int(k[0]),
-            open=float(k[1]), high=float(k[2]), low=float(k[3]), close=float(k[4]),
-            volume_btc=float(k[6]),  # volCcy = base ccy = BTC
-            exchange="okx",
-        ))
-    out.sort(key=lambda c: c.ts_ms)
-    return out
+# Coinalyze allowed intervals: 1min, 5min, 15min, 30min, 1hour, 2hour, 4hour, 6hour, 12hour, daily
+COINALYZE_INTERVAL_MAP = {
+    1: "1min", 5: "5min", 15: "15min", 30: "30min",
+    60: "1hour", 120: "2hour", 240: "4hour",
+}
 
 
 def aggregate_volume_profile(hours: float = 24.0, interval_min: int = 5) -> list[VolBucket]:
-    """Returns one VolBucket per time bucket, summed across exchanges.
+    """Aggregate OHLCV across all 3 exchanges into per-bucket VolBuckets.
 
-    Buy/sell split is derived from Binance's real taker_buy ratio when available
-    for that minute bucket; otherwise from candle direction (close>open ⇒ 55/45 buy bias).
+    Buy/sell split uses Coinalyze's real `bv` (taker buy volume) per candle.
     """
-    binance = fetch_binance_klines(f"{interval_min}m", hours)
-    bybit = fetch_bybit_klines(str(interval_min), hours)
-    okx = fetch_okx_klines(f"{interval_min}m", hours)
+    interval = COINALYZE_INTERVAL_MAP.get(interval_min, "5min")
+    now_s = int(time.time())
+    since_s = now_s - int(hours * 3600)
 
-    log.info("klines fetched: binance=%d bybit=%d okx=%d", len(binance), len(bybit), len(okx))
+    data = _get(
+        "/ohlcv-history",
+        {
+            "symbols": ",".join(SYMBOLS.values()),
+            "interval": interval,
+            "from": since_s,
+            "to": now_s,
+        },
+    )
+    log.info("coinalyze ohlcv: %d series", len(data))
 
-    # Index by ts_ms (klines naturally align on the same bucket boundary)
-    by_ts: dict[int, dict[str, Candle]] = {}
-    for c in binance:
-        by_ts.setdefault(c.ts_ms, {})["binance"] = c
-    for c in bybit:
-        by_ts.setdefault(c.ts_ms, {})["bybit"] = c
-    for c in okx:
-        by_ts.setdefault(c.ts_ms, {})["okx"] = c
+    # Index by ts (in seconds, Coinalyze uses seconds)
+    by_ts: dict[int, dict[str, dict]] = {}
+    for series in data:
+        sym = series["symbol"]
+        # Map back to our exchange label
+        ex_label = next((k for k, v in SYMBOLS.items() if v == sym), sym)
+        for c in series.get("history") or []:
+            ts = int(c["t"])
+            by_ts.setdefault(ts, {})[ex_label] = c
 
     buckets: list[VolBucket] = []
     for ts, ex_map in sorted(by_ts.items()):
-        total = sum(c.volume_btc for c in ex_map.values())
-        if total <= 0:
+        total_v = sum(float(c.get("v", 0) or 0) for c in ex_map.values())
+        if total_v <= 0:
             continue
+        total_bv = sum(float(c.get("bv", 0) or 0) for c in ex_map.values())
+        buy_pct = max(0.0, min(1.0, total_bv / total_v))
 
-        b = ex_map.get("binance")
-        if b and b.volume_btc > 0 and b.taker_buy_btc is not None:
-            buy_pct = max(0.0, min(1.0, b.taker_buy_btc / b.volume_btc))
-        else:
-            # Heuristic from any available candle's direction
-            ref = b or ex_map.get("bybit") or ex_map.get("okx")
-            if ref is None:
-                buy_pct = 0.5
-            elif ref.close > ref.open:
-                buy_pct = 0.55
-            elif ref.close < ref.open:
-                buy_pct = 0.45
-            else:
-                buy_pct = 0.5
+        # Typical price: volume-weighted average of per-exchange typical prices
+        def typical(c):
+            return (float(c["h"]) + float(c["l"]) + float(c["c"])) / 3
 
-        # Typical price: weighted by per-exchange volume
-        weighted_price = sum(c.typical * c.volume_btc for c in ex_map.values()) / total
+        weighted_price = sum(typical(c) * float(c["v"] or 0) for c in ex_map.values()) / total_v
 
         buckets.append(VolBucket(
-            ts_ms=ts,
+            ts_ms=ts * 1000,
             price=weighted_price,
-            buy_btc=total * buy_pct,
-            sell_btc=total * (1.0 - buy_pct),
+            buy_btc=total_v * buy_pct,
+            sell_btc=total_v * (1.0 - buy_pct),
         ))
-
     return buckets
 
 
 # ---------------- open interest history ----------------
 
-@dataclass
-class OIPoint:
-    ts_ms: int
-    oi_btc: float       # in base asset (BTC); USD-equivalent OI / mark price
-    exchange: str
-
-
-def fetch_binance_oi_hist(period: str = "1h", hours: float = 24.0) -> list[OIPoint]:
-    """Binance futures/data/openInterestHist. period in {5m,15m,30m,1h,2h,4h,6h,12h,1d}."""
-    minutes_per = {"5m":5,"15m":15,"30m":30,"1h":60,"2h":120,"4h":240,"6h":360,"12h":720,"1d":1440}.get(period, 60)
-    limit = min(500, max(1, int((hours * 60) / minutes_per) + 1))
-    r = requests.get(
-        "https://fapi.binance.com/futures/data/openInterestHist",
-        params={"symbol": BINANCE_SYMBOL, "period": period, "limit": limit},
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-    out: list[OIPoint] = []
-    for d in r.json():
-        # sumOpenInterest is in base asset (BTC) directly
-        out.append(OIPoint(
-            ts_ms=int(d["timestamp"]),
-            oi_btc=float(d["sumOpenInterest"]),
-            exchange="binance",
-        ))
-    return out
-
-
-def fetch_bybit_oi_hist(interval: str = "1h", hours: float = 24.0) -> list[OIPoint]:
-    """Bybit V5 open-interest. intervalTime in {5min,15min,30min,1h,4h,1d}."""
-    interval_map = {"5m":"5min","15m":"15min","30m":"30min","1h":"1h","4h":"4h","1d":"1d"}
-    iv = interval_map.get(interval, "1h")
-    minutes_per = {"5min":5,"15min":15,"30min":30,"1h":60,"4h":240,"1d":1440}.get(iv, 60)
-    limit = min(200, max(1, int((hours * 60) / minutes_per) + 1))
-    r = requests.get(
-        "https://api.bybit.com/v5/market/open-interest",
-        params={"category": "linear", "symbol": BYBIT_SYMBOL,
-                "intervalTime": iv, "limit": limit},
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-    out: list[OIPoint] = []
-    # Bybit returns OI in *contract* count for linear perp where 1 contract = 1 USDT-worth?
-    # Actually for BTCUSDT linear, openInterest is in BTC. Confirmed by docs.
-    for d in r.json().get("result", {}).get("list", []):
-        out.append(OIPoint(
-            ts_ms=int(d["timestamp"]),
-            oi_btc=float(d["openInterest"]),
-            exchange="bybit",
-        ))
-    out.sort(key=lambda p: p.ts_ms)
-    return out
-
-
-def fetch_okx_oi_hist(period: str = "1H", hours: float = 24.0) -> list[OIPoint]:
-    """OKX rubik/stat/contracts/open-interest-volume. period in {5m,1H,4H,1D}."""
-    minutes_per = {"5m":5,"1H":60,"4H":240,"1D":1440}.get(period, 60)
-    limit_hint = int((hours * 60) / minutes_per) + 1  # informational, OKX returns all available
-    r = requests.get(
-        "https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume",
-        params={"ccy": "BTC", "period": period},
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-    out: list[OIPoint] = []
-    # Returns: data = [[ts, oiUsd, volUsd], ...] (USD denominated)
-    rows = r.json().get("data", [])
-    # We need the mark price near each point to convert USD OI to BTC; for a 24h panel
-    # use current mark as a passable approximation (OI in BTC changes faster than mark).
-    mark = None
-    try:
-        mark = get_mark_price()
-    except Exception:
-        pass
-    for row in rows[:limit_hint]:
-        if len(row) < 2:
-            continue
-        ts = int(row[0])
-        oi_usd = float(row[1])
-        oi_btc = (oi_usd / mark) if mark else 0.0
-        out.append(OIPoint(ts_ms=ts, oi_btc=oi_btc, exchange="okx"))
-    out.sort(key=lambda p: p.ts_ms)
-    return out
-
-
 def fetch_aggregated_oi(hours: float = 24.0, period: str = "1h") -> dict[str, list[OIPoint]]:
-    """Return {exchange: [OIPoint, ...]} for the lookback window."""
-    result: dict[str, list[OIPoint]] = {}
-    for name, fn in (
-        ("binance", lambda: fetch_binance_oi_hist(period, hours)),
-        ("bybit",   lambda: fetch_bybit_oi_hist(period, hours)),
-        ("okx",     lambda: fetch_okx_oi_hist({"1h":"1H","4h":"4H","1d":"1D"}.get(period,"1H"), hours)),
-    ):
-        try:
-            pts = fn()
-            log.info("OI %s: %d points", name, len(pts))
-            result[name] = pts
-        except Exception as e:
-            log.warning("OI %s failed: %s", name, e)
-            result[name] = []
+    """Per-exchange OI history (BTC denominated)."""
+    interval_min = {"5m":5,"15m":15,"30m":30,"1h":60,"4h":240}.get(period, 60)
+    interval = COINALYZE_INTERVAL_MAP.get(interval_min, "1hour")
+    now_s = int(time.time())
+    since_s = now_s - int(hours * 3600)
+
+    data = _get(
+        "/open-interest-history",
+        {
+            "symbols": ",".join(SYMBOLS.values()),
+            "interval": interval,
+            "from": since_s,
+            "to": now_s,
+            "convert_to_usd": "false",   # all 3 symbols are denominated in BASE_ASSET (BTC)
+        },
+    )
+
+    result: dict[str, list[OIPoint]] = {ex: [] for ex in SYMBOLS}
+    for series in data:
+        sym = series["symbol"]
+        ex_label = next((k for k, v in SYMBOLS.items() if v == sym), None)
+        if ex_label is None:
+            continue
+        for p in series.get("history") or []:
+            # OHLC of OI; use close
+            result[ex_label].append(OIPoint(
+                ts_ms=int(p["t"]) * 1000,
+                oi_btc=float(p["c"]),
+                exchange=ex_label,
+            ))
+        log.info("OI %s: %d points", ex_label, len(result[ex_label]))
     return result
 
 
 # ---------------- liquidations ----------------
 
-def fetch_okx_liquidations(since_ms: int) -> list[Liquidation]:
-    """OKX filled liquidation orders (public, free).
-    Uses instFamily=BTC-USDT, state=filled.
-    posSide tells us which side was liquidated.
-    Pagination: 'before' = ts of oldest item in previous page (to go further back).
+def fetch_all_liquidations(since_ms: int, interval_min: int = 60) -> list[Liquidation]:
+    """Liquidation history bucketed per interval, per exchange.
+
+    Coinalyze returns aggregated per-bucket {l: long-liq-BTC, s: short-liq-BTC},
+    NOT individual fills. For the price-bucket chart, we use the close price of
+    the parent OHLCV candle as the price level — fetched in parallel below.
     """
+    interval = COINALYZE_INTERVAL_MAP.get(interval_min, "1hour")
+    now_s = int(time.time())
+    since_s = since_ms // 1000
+
+    # Fetch liquidations + OHLCV (for price labels) in two parallel calls.
+    liq_data = _get(
+        "/liquidation-history",
+        {
+            "symbols": ",".join(SYMBOLS.values()),
+            "interval": interval,
+            "from": since_s,
+            "to": now_s,
+            "convert_to_usd": "false",
+        },
+    )
+    ohlcv_data = _get(
+        "/ohlcv-history",
+        {
+            "symbols": ",".join(SYMBOLS.values()),
+            "interval": interval,
+            "from": since_s,
+            "to": now_s,
+        },
+    )
+
+    # Index OHLCV closes for price lookup: (symbol, ts) -> close
+    price_idx: dict[tuple[str, int], float] = {}
+    for series in ohlcv_data:
+        sym = series["symbol"]
+        for c in series.get("history") or []:
+            price_idx[(sym, int(c["t"]))] = float(c["c"])
+
     out: list[Liquidation] = []
-    before = ""  # cursor for older pages
-
-    for page in range(40):  # safety cap
-        params = {
-            "instType": "SWAP",
-            "instFamily": "BTC-USDT",
-            "state": "filled",
-            "limit": "100",
-        }
-        if before:
-            params["before"] = before
-
-        try:
-            r = requests.get(
-                "https://www.okx.com/api/v5/public/liquidation-orders",
-                params=params, timeout=TIMEOUT,
-            )
-            r.raise_for_status()
-            payload = r.json()
-        except Exception as e:
-            log.warning("okx liquidations page %d failed: %s", page, e)
-            break
-
-        data = payload.get("data", [])
-        if not data:
-            break
-
-        # Each top-level item is per (instType, instFamily); details has the actual fills
-        page_oldest_ts = None
-        page_count_kept = 0
-        for inst in data:
-            details = inst.get("details", [])
-            for d in details:
-                ts = int(d["ts"])
-                page_oldest_ts = ts if page_oldest_ts is None else min(page_oldest_ts, ts)
-                if ts < since_ms:
-                    continue
-                pos_side = d.get("posSide", "").lower()
-                if pos_side not in ("long", "short"):
-                    # fallback to 'side' (buy-side liq order = short was liquidated)
-                    side_raw = d.get("side", "").lower()
-                    pos_side = "short" if side_raw == "buy" else "long"
+    for series in liq_data:
+        sym = series["symbol"]
+        ex_label = next((k for k, v in SYMBOLS.items() if v == sym), sym)
+        for row in series.get("history") or []:
+            ts_s = int(row["t"])
+            price = price_idx.get((sym, ts_s))
+            if price is None:
+                continue
+            long_btc = float(row.get("l", 0) or 0)
+            short_btc = float(row.get("s", 0) or 0)
+            if long_btc > 0:
                 out.append(Liquidation(
-                    ts_ms=ts,
-                    price=float(d["bkPx"]),
-                    qty_btc=float(d["sz"]) * OKX_CONTRACT_SIZE_BTC,
-                    side=pos_side,
-                    exchange="okx",
+                    ts_ms=ts_s * 1000, price=price, qty_btc=long_btc,
+                    side="long", exchange=ex_label,
                 ))
-                page_count_kept += 1
-
-        # Stop paginating if we've already gone past the window
-        if page_oldest_ts is None or page_oldest_ts < since_ms:
-            break
-        before = str(page_oldest_ts)
-        # be polite
-        time.sleep(0.05)
-
-    log.info("okx liquidations collected: %d (since %s)",
-             len(out), time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(since_ms / 1000)))
+            if short_btc > 0:
+                out.append(Liquidation(
+                    ts_ms=ts_s * 1000, price=price, qty_btc=short_btc,
+                    side="short", exchange=ex_label,
+                ))
+    log.info("liquidations: %d entries across %d exchanges",
+             len(out), len({l.exchange for l in out}))
     return out
-
-
-def fetch_all_liquidations(since_ms: int) -> list[Liquidation]:
-    # OKX is the only exchange with a free REST endpoint for historical liquidations.
-    # Binance/Bybit only expose them via WebSocket which isn't compatible with stateless
-    # GHA cron. OKX serves as a reasonable proxy for visualization purposes.
-    return fetch_okx_liquidations(since_ms)
