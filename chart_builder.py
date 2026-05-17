@@ -35,7 +35,7 @@ BG       = "#131722"   # canvas
 FG       = "#D1D4DC"   # primary text
 DIM      = "#787B86"   # secondary text / ticks
 GRID     = "#1E222D"   # grid / spines (barely visible)
-MARK     = "#2962FF"   # mark price line (TV blue)
+MARK     = "#FFD600"   # mark price line (yellow)
 POC      = "#FFFFFF"   # Point of Control marker
 
 C_BUY    = "#26A69A"   # TV green (taker buys)
@@ -202,8 +202,9 @@ def build_chart(
 
     fig = plt.figure(figsize=(8.8, 11.0), dpi=130)
     fig.patch.set_facecolor(BG)
-    # Leave ~12% right margin so Mark / POC labels don't clip
-    ax = fig.add_axes([0.10, 0.07, 0.76, 0.82])
+    # Leave ~12% right margin so Mark / POC labels don't clip.
+    # Top trimmed to make room for in-figure legend strip.
+    ax = fig.add_axes([0.10, 0.07, 0.76, 0.78])
     ax.set_facecolor(BG)  # no contrast box — flat canvas like TV
 
     bar_h = (bins[1] - bins[0]) * 0.78  # slight gap between bars
@@ -365,11 +366,14 @@ def build_chart(
     )
     fig.text(0.5, 0.025, footer, color=DIM, fontsize=9, ha="center", family="monospace")
 
-    # ---- Legend: top-left of axes, no frame, 3 cols (6 items) ----
+    # ---- Legend: single row strip above the axes, in figure space ----
+    # Placed between subtitle and chart top so it never overlaps bars.
     leg = ax.legend(
-        loc="upper left",
-        ncol=3, fontsize=8, frameon=False,
-        labelcolor=DIM, handlelength=1.2, handletextpad=0.4, columnspacing=1.2,
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.005),    # just above the axes
+        bbox_transform=ax.transAxes,
+        ncol=6, fontsize=8, frameon=False,
+        labelcolor=DIM, handlelength=1.2, handletextpad=0.4, columnspacing=1.4,
     )
     for txt in leg.get_texts():
         txt.set_color(DIM)
