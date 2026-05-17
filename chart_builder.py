@@ -248,8 +248,9 @@ def build_chart(
     ax.barh(centers, -liq_long,  height=inner_h, left=-vol_sell,
             color=C_LIQ_L, alpha=0.95, edgecolor="none", label="REKT ロング")
 
-    # ---- Mark price line (thin dashed, TV blue) ----
-    ax.axhline(mark, color=MARK, linewidth=1.0, linestyle=(0, (4, 3)), alpha=0.9)
+    # ---- Mark price line (thick yellow, semi-solid for prominence) ----
+    ax.axhline(mark, color=MARK, linewidth=2.4, linestyle=(0, (6, 3)), alpha=1.0,
+               zorder=5)
 
     # ---- POC (Point of Control = bin with highest total volume) ----
     total_vol_per_bin = vol_buy + vol_sell
@@ -289,7 +290,7 @@ def build_chart(
         f"{mark:,.0f}",
         xy=(1.0, mark), xycoords=("axes fraction", "data"),
         xytext=(6, 0), textcoords="offset points",
-        color=MARK, fontsize=10, fontweight="bold", va="center", ha="left",
+        color=MARK, fontsize=12, fontweight="bold", va="center", ha="left",
     )
     # ---- POC label (right side, axes-relative) ----
     if total_vol_per_bin.max() > 0:
