@@ -226,26 +226,26 @@ def build_chart(
                 height=oi_bar_h, left=vol_buy,
                 color=C_OI_UP, alpha=OI_ALPHA, hatch="///",
                 edgecolor=C_OI_UP, linewidth=0.0,
-                label="est. OI new (dOI>0)")
+                label="推定OI 新規 (+)")
         # dOI < 0 (closed OI) — pale rose, hatched, LEFT side
         ax.barh(centers + oi_offset_y, -oi_dn * oi_scale,
                 height=oi_bar_h, left=-vol_sell,
                 color=C_OI_DN, alpha=OI_ALPHA, hatch="\\\\\\",
                 edgecolor=C_OI_DN, linewidth=0.0,
-                label="est. OI close (dOI<0)")
+                label="推定OI 解消 (−)")
 
     # Volume profile — sells left, buys right
     ax.barh(centers,  vol_buy,  height=bar_h, color=C_BUY,  alpha=BAR_ALPHA,
-            edgecolor="none", label="Buy volume")
+            edgecolor="none", label="Trade 買い")
     ax.barh(centers, -vol_sell, height=bar_h, color=C_SELL, alpha=BAR_ALPHA,
-            edgecolor="none", label="Sell volume")
+            edgecolor="none", label="Trade 売り")
 
     # Liquidations — inner marker thin bars overlaid on top of vol bars
     inner_h = bar_h * 0.45
     ax.barh(centers,  liq_short, height=inner_h, left=vol_buy,
-            color=C_LIQ_S, alpha=0.95, edgecolor="none", label="Short liq")
+            color=C_LIQ_S, alpha=0.95, edgecolor="none", label="REKT ショート")
     ax.barh(centers, -liq_long,  height=inner_h, left=-vol_sell,
-            color=C_LIQ_L, alpha=0.95, edgecolor="none", label="Long liq")
+            color=C_LIQ_L, alpha=0.95, edgecolor="none", label="REKT ロング")
 
     # ---- Mark price line (thin dashed, TV blue) ----
     ax.axhline(mark, color=MARK, linewidth=1.0, linestyle=(0, (4, 3)), alpha=0.9)
@@ -322,7 +322,7 @@ def build_chart(
     # ---- Title block (top-left, two lines) ----
     now_jst = now.astimezone(JST)
     fig.text(
-        0.10, 0.955, "BTC PERP  ·  VOLUME PROFILE & LIQUIDATIONS",
+        0.10, 0.955, "BTC PERP  ·  出来高プロファイル & 清算ヒートマップ",
         color=FG, fontsize=13, fontweight="bold", ha="left",
     )
     fig.text(
