@@ -1,0 +1,9 @@
+.env
+.last_posted.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+images/*
+!images/.gitkeep
+*.log

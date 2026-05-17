@@ -1,0 +1,100 @@
+name: Post BTC OI chart
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC. JST = UTC + 9h
+    # 03:05 / 09:05 / 15:05 / 21:05 UTC  =  12:05 / 18:05 / 00:05 / 06:05 JST
+    # → JSTの 0時/6時/12時/18時 (1日4回, 6時間毎) に投稿
+    - cron: "5 3,9,15,21 * * *"
+  workflow_dispatch:
+    inputs:
+      enable_x:
+        description: "Enable X (Twitter) posting for THIS run only"
+        type: boolean
+        default: false
+      force:
+        description: "Force post even if same chart was already posted"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Generate chart but skip both Discord and X posting"
+        type: boolean
+        default: false
+      skip_discord:
+        description: "Skip Discord (use to send only to X)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write    # needed for _ci_state.sh to push to bot-state branch
+
+concurrency:
+  group: oi-time-state
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Japanese font (Noto Sans CJK)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          rm -rf ~/.cache/matplotlib
+
+      - name: Restore state from bot-state branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/_ci_state.sh restore
+
+      - name: Generate + post chart
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          IMAGES_DIR: ./images
+          CHART_LOOKBACK_HOURS: "24"
+          CHART_RANGE_PCT: "3"
+          POST_TEMPLATE: "【BTC OI/Liq 24h】Mark {mark} | OI {oi} BTC ({oi_chg})\nVol B/S {vol_buy}/{vol_sell} | Liq S/L {liq_short}/{liq_long} BTC\n{commentary}\n{timestamp} JST #BTC #Bitcoin"
+          # X gating: scheduled runs ALWAYS skip X. Manual runs require enable_x input.
+          ENABLE_X: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_x && 'true' || 'false' }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ "${{ inputs.skip_discord }}" = "true" ]; then ARGS="$ARGS --skip-discord"; fi
+          python post_chart.py $ARGS
+
+      - name: Save state to bot-state branch
+        if: ${{ always() && inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/_ci_state.sh save
+
+      - name: Upload chart as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc_profile_${{ github.run_id }}
+          path: images/btc_profile.png
+          if-no-files-found: ignore
+          retention-days: 14
