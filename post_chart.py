@@ -190,11 +190,12 @@ def main() -> int:
         log.info("No new image since last post (%s) - skipping", image.name)
         return 0
 
-    # Generate Gemini commentary (graceful: None on failure)
+    # Generate commentary via provider fallback chain
+    # (gemini → grok → openai → deepl by default). Graceful: None on failure.
     commentary: str | None = None
-    if meta and os.getenv("GEMINI_API_KEY"):
+    if meta:
         try:
-            from gemini_commentary import generate_commentary
+            from commentary import generate_commentary
             commentary = generate_commentary(meta)
         except Exception as e:
             log.warning("commentary generation failed (non-fatal): %s", e)

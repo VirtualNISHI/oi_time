@@ -1,9 +1,9 @@
-"""Gemini provider: one-line JP market commentary.
+"""OpenAI provider: one-line JP market commentary.
 
 Returns None on any failure (missing key, SDK not installed, API issue) so the
 orchestrator can fall through to the next provider.
 
-Model: gemini-2.5-flash-lite (override via GEMINI_MODEL).
+Model: gpt-4o-mini (override via OPENAI_MODEL).
 """
 
 from __future__ import annotations
@@ -15,34 +15,35 @@ from commentary import SYSTEM_PROMPT, clean_output, format_user_prompt
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 
 def generate_commentary(meta: dict, *, api_key: str | None = None) -> str | None:
-    api_key = api_key or os.getenv("GEMINI_API_KEY")
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        log.info("gemini: no GEMINI_API_KEY, skipping")
+        log.info("openai: no OPENAI_API_KEY, skipping")
         return None
 
     try:
-        from google import genai  # type: ignore
-        from google.genai import types as genai_types  # type: ignore
+        from openai import OpenAI  # type: ignore
     except ImportError:
-        log.warning("gemini: google-genai SDK not installed, skipping")
+        log.warning("openai: openai SDK not installed, skipping")
         return None
 
-    model = os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
-    client = genai.Client(api_key=api_key)
-    resp = client.models.generate_content(
+    model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+    base_url = os.getenv("OPENAI_BASE_URL")  # optional, for Azure/proxy
+    client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+    resp = client.chat.completions.create(
         model=model,
-        contents=format_user_prompt(meta),
-        config=genai_types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.4,
-            max_output_tokens=200,
-        ),
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": format_user_prompt(meta)},
+        ],
+        temperature=0.4,
+        max_tokens=200,
     )
-    return clean_output(getattr(resp, "text", None))
+    text = resp.choices[0].message.content if resp.choices else None
+    return clean_output(text)
 
 
 if __name__ == "__main__":
