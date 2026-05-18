@@ -24,6 +24,10 @@ on:
         description: "Skip Discord (use to send only to X)"
         type: boolean
         default: false
+      commentary_providers:
+        description: "Override commentary provider order (comma-separated, e.g. openai,gemini). Empty = use default chain."
+        type: string
+        default: ""
 
 permissions:
   contents: write    # needed for _ci_state.sh to push to bot-state branch
@@ -74,6 +78,7 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+          COMMENTARY_PROVIDERS: ${{ inputs.commentary_providers }}
           COINALYZE_API_KEY: ${{ secrets.COINALYZE_API_KEY }}
           IMAGES_DIR: ./images
           CHART_LOOKBACK_HOURS: "24"
