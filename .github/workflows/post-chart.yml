@@ -3,10 +3,11 @@ name: Post BTC OI chart
 on:
   schedule:
     # GitHub Actions cron is UTC. JST = UTC + 9h
-    # 15:05 / 23:05 / 07:05 UTC  =  00:05 / 08:05 / 16:05 JST
-    # → JSTの 0時/8時/16時 (1日3回, 8時間毎) に Discord + X 両方へ投稿
+    # 00:10 / 08:10 / 16:10 UTC  =  09:10 / 17:10 / 01:10 JST
+    # → JSTの 9時前後を基準に8時間毎 (1日3回) Discord + X 両方へ投稿。
+    # 9:00 ジャストはGHA cron 遅延でmissが多いため +10min ずらしている。
     # X API Free枠: 17 tweets/24h, 500/month — 3/day なので余裕
-    - cron: "5 7,15,23 * * *"
+    - cron: "10 0,8,16 * * *"
   workflow_dispatch:
     inputs:
       enable_x:
