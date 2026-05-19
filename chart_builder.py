@@ -292,13 +292,13 @@ def build_chart(
         xytext=(6, 0), textcoords="offset points",
         color=MARK, fontsize=12, fontweight="bold", va="center", ha="left",
     )
-    # ---- POC label (right side, axes-relative) ----
+    # ---- POC label (right side, axes-relative) — number only, no "POC" prefix ----
     if total_vol_per_bin.max() > 0:
         ax.annotate(
-            f"POC {poc_price:,.0f}",
+            f"{poc_price:,.0f}",
             xy=(1.0, poc_price), xycoords=("axes fraction", "data"),
             xytext=(6, 0), textcoords="offset points",
-            color=POC, fontsize=8, alpha=0.85, va="center", ha="left",
+            color=POC, fontsize=9, alpha=0.85, va="center", ha="left",
         )
 
     # ---- Minimal grid: horizontal lines only, very faint ----
