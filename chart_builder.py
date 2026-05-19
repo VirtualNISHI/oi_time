@@ -292,10 +292,12 @@ def build_chart(
         xytext=(6, 0), textcoords="offset points",
         color=MARK, fontsize=12, fontweight="bold", va="center", ha="left",
     )
-    # ---- POC label (right side, axes-relative) — number only, no "POC" prefix ----
+    # ---- "現在BTC価格" header text at the POC y-position (right margin) ----
+    # The marker triangle still cues where the most-traded bin is; the upper
+    # slot now reads as a descriptor for the bold price label just below.
     if total_vol_per_bin.max() > 0:
         ax.annotate(
-            f"{poc_price:,.0f}",
+            "現在BTC価格",
             xy=(1.0, poc_price), xycoords=("axes fraction", "data"),
             xytext=(6, 0), textcoords="offset points",
             color=POC, fontsize=9, alpha=0.85, va="center", ha="left",
