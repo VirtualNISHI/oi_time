@@ -92,6 +92,7 @@ def post_to_x(creds: dict, image_path: Path, text: str) -> None:
 
 
 def format_text(template: str, meta: dict | None, commentary: str | None = None) -> str:
+    import re
     timestamp = datetime.now(JST).strftime("%Y-%m-%d %H:%M")
     ctx = {
         "timestamp": timestamp,
@@ -109,15 +110,20 @@ def format_text(template: str, meta: dict | None, commentary: str | None = None)
             f"{'+' if meta['oi_change_pct_24h'] >= 0 else ''}{meta['oi_change_pct_24h']:.2f}%"
             if meta and meta.get("oi_change_pct_24h") is not None else "n/a"
         ),
-        "commentary": commentary or "",
+        # Prefix bullet only when we have something to say; empty string when not,
+        # so the surrounding blank lines collapse via the regex below.
+        "commentary": f"▸ {commentary}" if commentary else "",
     }
     try:
         text = template.format(**ctx)
     except KeyError as e:
         log.warning("template key missing: %s — falling back to {timestamp} only", e)
         text = template.format(timestamp=timestamp)
-    # Collapse "{commentary}\n" → empty when commentary missing, so layout stays clean
-    return "\n".join(line for line in text.split("\n") if line.strip())
+    # Preserve intentional blank lines (paragraph breaks) but collapse runs of 3+
+    # newlines (= 2+ empty lines, which happen when {commentary} is empty between
+    # already-blank lines) down to a single blank line. Then strip surrounding ws.
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 def main() -> int:
@@ -146,9 +152,15 @@ def main() -> int:
     state_file = Path(os.getenv("STATE_FILE", project_dir / ".last_posted.json")).resolve()
     template = os.getenv(
         "POST_TEMPLATE",
-        "BTC Volume Profile & Liquidations (直近{lookback_h}h)\n"
-        "Mark {mark} | Vol B/S {vol_buy}/{vol_sell} BTC | Liq S/L {liq_short}/{liq_long} BTC\n"
-        "{timestamp} JST #BTC #Bitcoin",
+        "【BTC Perp · 24h】 Mark {mark}\n"
+        "\n"
+        "Vol  買 {vol_buy} / 売 {vol_sell} BTC\n"
+        "Liq  S {liq_short} / L {liq_long} BTC\n"
+        "OI   {oi} BTC ({oi_chg})\n"
+        "\n"
+        "{commentary}\n"
+        "\n"
+        "{timestamp} JST  #BTC #Bitcoin",
     )
     lookback_hours = args.lookback_hours if args.lookback_hours is not None else float(
         os.getenv("CHART_LOOKBACK_HOURS", "24"))

@@ -85,7 +85,7 @@ jobs:
           IMAGES_DIR: ./images
           CHART_LOOKBACK_HOURS: "24"
           CHART_RANGE_PCT: "3"
-          POST_TEMPLATE: "【BTC OI/Liq 24h】Mark {mark} | OI {oi} BTC ({oi_chg})\nVol B/S {vol_buy}/{vol_sell} | Liq S/L {liq_short}/{liq_long} BTC\n{commentary}\n{timestamp} JST #BTC #Bitcoin"
+          POST_TEMPLATE: "【BTC Perp · 24h】 Mark {mark}\n\nVol  買 {vol_buy} / 売 {vol_sell} BTC\nLiq  S {liq_short} / L {liq_long} BTC\nOI   {oi} BTC ({oi_chg})\n\n{commentary}\n\n{timestamp} JST  #BTC #Bitcoin"
           # X gating: scheduled runs post to X by default (user-approved 2026-05-19).
           # Manual runs only post to X when inputs.enable_x is explicitly true.
           ENABLE_X: ${{ github.event_name == 'schedule' && 'true' || (inputs.enable_x && 'true' || 'false') }}

@@ -35,7 +35,7 @@ BG       = "#131722"   # canvas
 FG       = "#D1D4DC"   # primary text
 DIM      = "#787B86"   # secondary text / ticks
 GRID     = "#1E222D"   # grid / spines (barely visible)
-MARK     = "#FFD600"   # mark price line (yellow)
+MARK     = "#FFFFFF"   # mark price line (white)
 POC      = "#FFFFFF"   # Point of Control marker
 
 C_BUY    = "#26A69A"   # TV green (taker buys)
