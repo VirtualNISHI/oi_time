@@ -3,9 +3,10 @@ name: Post BTC OI chart
 on:
   schedule:
     # GitHub Actions cron is UTC. JST = UTC + 9h
-    # 03:05 / 09:05 / 15:05 / 21:05 UTC  =  12:05 / 18:05 / 00:05 / 06:05 JST
-    # → JSTの 0時/6時/12時/18時 (1日4回, 6時間毎) に投稿
-    - cron: "5 3,9,15,21 * * *"
+    # 15:05 / 23:05 / 07:05 UTC  =  00:05 / 08:05 / 16:05 JST
+    # → JSTの 0時/8時/16時 (1日3回, 8時間毎) に Discord + X 両方へ投稿
+    # X API Free枠: 17 tweets/24h, 500/month — 3/day なので余裕
+    - cron: "5 7,15,23 * * *"
   workflow_dispatch:
     inputs:
       enable_x:
@@ -84,8 +85,9 @@ jobs:
           CHART_LOOKBACK_HOURS: "24"
           CHART_RANGE_PCT: "3"
           POST_TEMPLATE: "【BTC OI/Liq 24h】Mark {mark} | OI {oi} BTC ({oi_chg})\nVol B/S {vol_buy}/{vol_sell} | Liq S/L {liq_short}/{liq_long} BTC\n{commentary}\n{timestamp} JST #BTC #Bitcoin"
-          # X gating: scheduled runs ALWAYS skip X. Manual runs require enable_x input.
-          ENABLE_X: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_x && 'true' || 'false' }}
+          # X gating: scheduled runs post to X by default (user-approved 2026-05-19).
+          # Manual runs only post to X when inputs.enable_x is explicitly true.
+          ENABLE_X: ${{ github.event_name == 'schedule' && 'true' || (inputs.enable_x && 'true' || 'false') }}
         run: |
           ARGS=""
           if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
