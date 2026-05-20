@@ -83,10 +83,11 @@ jobs:
           COMMENTARY_PROVIDERS: ${{ inputs.commentary_providers }}
           COINALYZE_API_KEY: ${{ secrets.COINALYZE_API_KEY }}
           IMAGES_DIR: ./images
-          # Trial: 7-day window so the wider ±10% range gets filled by past
-          # price action. Kline interval is auto-picked (30min for 7d).
+          # Trial: 14-day window so the wider ±10% range gets filled by
+          # past price action (7d still left empty corners at ±10%).
+          # Kline interval is auto-picked (60min for ≥7d).
           # Drop back to "24" to return to last-24h view.
-          CHART_LOOKBACK_HOURS: "168"
+          CHART_LOOKBACK_HOURS: "336"
           CHART_RANGE_PCT: "3"
           # Trial: symmetric ±10% window (both _UP and _DOWN set explicitly,
           # which also disables auto-fit so the wider view is actually shown).
