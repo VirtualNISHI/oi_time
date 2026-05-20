@@ -128,10 +128,13 @@ def build_chart(
     range_pct_down : lower-side % (overrides range_pct for the low bound).
     """
 
-    # Resolve asymmetric range with backward-compat fallback.
+    # Resolve range with backward-compat fallback.
     up = range_pct_up if range_pct_up is not None else range_pct
     down = range_pct_down if range_pct_down is not None else range_pct
     asymmetric = abs(up - down) > 0.01
+    # Skip auto-fit when the caller explicitly set either side — the user
+    # picked a window on purpose, don't zoom them back into the tight view.
+    explicit_range = (range_pct_up is not None) or (range_pct_down is not None)
 
     now = datetime.now(timezone.utc)
     since_ms = int((now - timedelta(hours=lookback_hours)).timestamp() * 1000)
@@ -277,9 +280,10 @@ def build_chart(
     ax.axvline(0, color=GRID, linewidth=0.8)
 
     # ---- Y limits ----
-    # Asymmetric range: show the full configured window so the user actually
-    # sees the wider side (e.g. +10% upper). Symmetric: auto-fit to data + pad.
-    if asymmetric:
+    # When the caller explicitly configured the range (asymmetric, or either
+    # _UP/_DOWN env set), show the full configured window. Otherwise auto-fit
+    # to data + pad for the tighter default-3% view.
+    if asymmetric or explicit_range:
         ylim_lo, ylim_hi = p_low, p_high
     else:
         activity = total_vol_per_bin + liq_short + liq_long
