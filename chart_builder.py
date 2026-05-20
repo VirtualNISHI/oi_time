@@ -88,6 +88,21 @@ def _fmt_btc(x: float) -> str:
     return f"{x:,.0f}"
 
 
+def _pick_interval_min(hours: float) -> int:
+    """Auto-pick a Coinalyze kline interval that keeps the per-call count
+    reasonable (< ~700 candles) while preserving fidelity for the window.
+
+    Coinalyze allowed intervals (in minutes): 1, 5, 15, 30, 60, 120, 240.
+    """
+    if hours <= 24:
+        return 5     # 288 candles
+    if hours <= 72:
+        return 15    # 288 candles
+    if hours <= 168:
+        return 30    # 336 candles  (7d)
+    return 60        # ≥7d, 1h candles
+
+
 def _compute_oi_summary(hours: float, since_ms: int) -> tuple[float | None, float | None]:
     """Return (latest_total_oi_btc, pct_change_over_window).
 
@@ -147,8 +162,10 @@ def build_chart(
     bins = np.linspace(p_low, p_high, n_bins + 1)
     centers = (bins[:-1] + bins[1:]) / 2
 
-    # ---- Volume profile from aggregated 5-min klines ----
-    buckets = aggregate_volume_profile(hours=lookback_hours, interval_min=5)
+    # ---- Volume profile (interval auto-picked from lookback) ----
+    interval_min = _pick_interval_min(lookback_hours)
+    log.info("kline interval: %dmin (for %.1fh lookback)", interval_min, lookback_hours)
+    buckets = aggregate_volume_profile(hours=lookback_hours, interval_min=interval_min)
     buckets = [b for b in buckets if b.ts_ms >= since_ms and p_low <= b.price <= p_high]
     log.info("vol buckets in window+range: %d", len(buckets))
 
@@ -188,7 +205,7 @@ def build_chart(
 
     # ---- OI delta profile (M2 — heuristic estimate) ----
     try:
-        oi_delta = compute_oi_delta_profile(hours=lookback_hours, fine_interval_min=5)
+        oi_delta = compute_oi_delta_profile(hours=lookback_hours, fine_interval_min=interval_min)
     except Exception as e:
         log.warning("OI delta profile failed (non-fatal): %s", e)
         oi_delta = []
@@ -346,13 +363,18 @@ def build_chart(
 
     # ---- Title block (top-left, two lines) ----
     now_jst = now.astimezone(JST)
+    # Window label: days when ≥24h, otherwise hours
+    if lookback_hours >= 24 and lookback_hours % 24 == 0:
+        window_label = f"Last {int(lookback_hours / 24)}d"
+    else:
+        window_label = f"Last {int(lookback_hours)}h"
     fig.text(
         0.10, 0.955, "BTC PERP  ·  出来高プロファイル & 清算ヒートマップ",
         color=FG, fontsize=13, fontweight="bold", ha="left",
     )
     fig.text(
         0.10, 0.932,
-        f"Last {int(lookback_hours)}h  ·  Binance + Bybit + OKX (via Coinalyze)  ·  "
+        f"{window_label}  ·  Binance + Bybit + OKX (via Coinalyze)  ·  "
         f"{now_jst.strftime('%Y-%m-%d %H:%M')} JST",
         color=DIM, fontsize=9, ha="left",
     )
