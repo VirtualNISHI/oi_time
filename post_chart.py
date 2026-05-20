@@ -166,6 +166,12 @@ def main() -> int:
         os.getenv("CHART_LOOKBACK_HOURS", "24"))
     range_pct = args.range_pct if args.range_pct is not None else float(
         os.getenv("CHART_RANGE_PCT", "3"))
+    # Optional asymmetric overrides (CHART_RANGE_PCT_UP / _DOWN). When unset
+    # the symmetric range_pct is used for both sides.
+    range_pct_up_env = os.getenv("CHART_RANGE_PCT_UP")
+    range_pct_dn_env = os.getenv("CHART_RANGE_PCT_DOWN")
+    range_pct_up = float(range_pct_up_env) if range_pct_up_env else None
+    range_pct_down = float(range_pct_dn_env) if range_pct_dn_env else None
 
     # --- resolve image (generate or pick existing) ---
     meta: dict | None = None
@@ -189,7 +195,11 @@ def main() -> int:
         out = images_dir / "btc_profile.png"
         try:
             meta = build_chart(
-                out, lookback_hours=lookback_hours, range_pct=range_pct,
+                out,
+                lookback_hours=lookback_hours,
+                range_pct=range_pct,
+                range_pct_up=range_pct_up,
+                range_pct_down=range_pct_down,
             )
         except Exception as e:
             log.exception("chart generation failed: %s", e)

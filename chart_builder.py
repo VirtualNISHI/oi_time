@@ -117,18 +117,30 @@ def build_chart(
     output_path: Path,
     lookback_hours: float = 24.0,
     range_pct: float = 3.0,
+    range_pct_up: float | None = None,
+    range_pct_down: float | None = None,
     n_bins: int = 80,
 ) -> dict:
-    """Generate the chart and write to output_path. Returns a metadata dict."""
+    """Generate the chart and write to output_path. Returns a metadata dict.
+
+    range_pct      : symmetric % range around mark (legacy single-value API).
+    range_pct_up   : upper-side % (overrides range_pct for the high bound).
+    range_pct_down : lower-side % (overrides range_pct for the low bound).
+    """
+
+    # Resolve asymmetric range with backward-compat fallback.
+    up = range_pct_up if range_pct_up is not None else range_pct
+    down = range_pct_down if range_pct_down is not None else range_pct
+    asymmetric = abs(up - down) > 0.01
 
     now = datetime.now(timezone.utc)
     since_ms = int((now - timedelta(hours=lookback_hours)).timestamp() * 1000)
 
     mark = get_mark_price()
-    log.info("mark price: $%.2f", mark)
+    log.info("mark price: $%.2f  range -%.1f%% .. +%.1f%%", mark, down, up)
 
-    p_low = mark * (1 - range_pct / 100)
-    p_high = mark * (1 + range_pct / 100)
+    p_low = mark * (1 - down / 100)
+    p_high = mark * (1 + up / 100)
     bins = np.linspace(p_low, p_high, n_bins + 1)
     centers = (bins[:-1] + bins[1:]) / 2
 
@@ -264,18 +276,23 @@ def build_chart(
     # ---- Center vertical line ----
     ax.axvline(0, color=GRID, linewidth=0.8)
 
-    # ---- Auto-fit Y to where data is, with a tight margin ----
-    activity = total_vol_per_bin + liq_short + liq_long
-    nonzero = np.where(activity > 0)[0]
-    if len(nonzero):
-        data_lo = float(centers[nonzero[0]])
-        data_hi = float(centers[nonzero[-1]])
-        span = max(data_hi - data_lo, mark * 0.004)
-        pad = span * 0.06
-        ylim_lo = max(p_low, min(data_lo, mark) - pad)
-        ylim_hi = min(p_high, max(data_hi, mark) + pad)
-    else:
+    # ---- Y limits ----
+    # Asymmetric range: show the full configured window so the user actually
+    # sees the wider side (e.g. +10% upper). Symmetric: auto-fit to data + pad.
+    if asymmetric:
         ylim_lo, ylim_hi = p_low, p_high
+    else:
+        activity = total_vol_per_bin + liq_short + liq_long
+        nonzero = np.where(activity > 0)[0]
+        if len(nonzero):
+            data_lo = float(centers[nonzero[0]])
+            data_hi = float(centers[nonzero[-1]])
+            span = max(data_hi - data_lo, mark * 0.004)
+            pad = span * 0.06
+            ylim_lo = max(p_low, min(data_lo, mark) - pad)
+            ylim_hi = min(p_high, max(data_hi, mark) + pad)
+        else:
+            ylim_lo, ylim_hi = p_low, p_high
     ax.set_ylim(ylim_lo, ylim_hi)
 
     max_abs = max(
@@ -292,16 +309,16 @@ def build_chart(
         xytext=(6, 0), textcoords="offset points",
         color=MARK, fontsize=12, fontweight="bold", va="center", ha="left",
     )
-    # ---- "現在BTC価格" header text at the POC y-position (right margin) ----
-    # The marker triangle still cues where the most-traded bin is; the upper
-    # slot now reads as a descriptor for the bold price label just below.
-    if total_vol_per_bin.max() > 0:
-        ax.annotate(
-            "現在BTC価格",
-            xy=(1.0, poc_price), xycoords=("axes fraction", "data"),
-            xytext=(6, 0), textcoords="offset points",
-            color=POC, fontsize=9, alpha=0.85, va="center", ha="left",
-        )
+    # ---- "現在BTC価格" header text — fixed offset just above the mark number ----
+    # Stays attached to the mark line regardless of where POC lands, so the
+    # 2-line "label + value" group never collides when the y-range stretches
+    # (e.g. asymmetric +10/-3 trial).
+    ax.annotate(
+        "現在BTC価格",
+        xy=(1.0, mark), xycoords=("axes fraction", "data"),
+        xytext=(6, 14), textcoords="offset points",
+        color=POC, fontsize=9, alpha=0.85, va="bottom", ha="left",
+    )
 
     # ---- Minimal grid: horizontal lines only, very faint ----
     ax.grid(True, axis="y", color=GRID, linewidth=0.6, alpha=0.7)
@@ -390,6 +407,8 @@ def build_chart(
         "mark": mark,
         "lookback_hours": lookback_hours,
         "range_pct": range_pct,
+        "range_pct_up": up,
+        "range_pct_down": down,
         "n_vol_buckets": len(buckets),
         "n_liqs": len(liqs),
         "total_vol_buy_btc": total_vol_buy,
