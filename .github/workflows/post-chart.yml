@@ -3,11 +3,11 @@ name: Post BTC OI chart
 on:
   schedule:
     # GitHub Actions cron is UTC. JST = UTC + 9h
-    # 00:10 / 08:10 / 16:10 UTC  =  09:10 / 17:10 / 01:10 JST
-    # → JSTの 9時前後を基準に8時間毎 (1日3回) Discord + X 両方へ投稿。
-    # 9:00 ジャストはGHA cron 遅延でmissが多いため +10min ずらしている。
-    # X API Free枠: 17 tweets/24h, 500/month — 3/day なので余裕
-    - cron: "10 0,8,16 * * *"
+    # 00:10 / 06:10 / 12:10 / 18:10 UTC = 09:10 / 15:10 / 21:10 / 03:10 JST
+    # → 6時間毎 (1日4回) Discord + X 両方へ投稿。
+    # 上記時刻はトップオブアワー回避のため +10min。
+    # X API Free枠: 17 tweets/24h, 500/month — 4/day, 120/month で余裕。
+    - cron: "10 0,6,12,18 * * *"
   workflow_dispatch:
     inputs:
       enable_x:
@@ -97,10 +97,9 @@ jobs:
           CHART_RANGE_PCT_DOWN: "7"
           POST_TEMPLATE: "【BTC価格帯別OIマップ】 Mark {mark}\n\nVol  買 {vol_buy} / 売 {vol_sell} BTC\nLiq  S {liq_short} / L {liq_long} BTC\nOI   {oi} BTC ({oi_chg})\n\n{commentary}\n\n{timestamp} JST  #BTC #Bitcoin\n※OIはAIが収集したもので推定となります"
           # X gating:
-          # During the +10% range trial (2026-05-20–) scheduled runs are
-          # Discord-only. Manual runs can still opt-in to X via inputs.enable_x.
-          # To re-enable X for cron, change the schedule branch back to 'true'.
-          ENABLE_X: ${{ github.event_name == 'schedule' && 'false' || (inputs.enable_x && 'true' || 'false') }}
+          # Scheduled runs post to X (user-approved 2026-05-28, 6h cadence).
+          # Manual runs require inputs.enable_x to be explicitly true.
+          ENABLE_X: ${{ github.event_name == 'schedule' && 'true' || (inputs.enable_x && 'true' || 'false') }}
         run: |
           ARGS=""
           if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
