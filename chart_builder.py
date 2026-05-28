@@ -30,15 +30,15 @@ log = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
-# ---- Palette: original BitMEX-style image colors on a dark canvas ------------
+# ---- Palette: light-theme, original BitMEX-image style -----------------------
 # Each layer pair (buy / sell side) shares one color — left / right position
 # carries the directional information, like the original chart.
-BG       = "#131722"   # dark canvas (X / TV dark theme)
-FG       = "#D1D4DC"   # primary text
-DIM      = "#787B86"   # secondary text / ticks
-GRID     = "#1E222D"   # grid / spines (barely visible)
-MARK     = "#00E676"   # mark price line — green (original-style)
-POC      = "#FFFFFF"   # Point of Control marker
+BG       = "#FFFFFF"   # light canvas (matches original image)
+FG       = "#1A1A1A"   # primary text  (near-black)
+DIM      = "#555555"   # secondary text / ticks
+GRID     = "#E8E8E8"   # grid / spines (very faint)
+MARK     = "#00C853"   # mark price line — green (original-style, deeper for white bg)
+POC      = "#1A1A1A"   # POC marker / current-price label header — dark on white
 
 C_BUY    = "#FFC107"   # Trade 買い  — yellow/amber
 C_SELL   = "#FFC107"   # Trade 売り  — same yellow (left/right separation)
@@ -46,8 +46,8 @@ C_LIQ_S  = "#EC407A"   # REKT ショート — pink (original's REKT 精算)
 C_LIQ_L  = "#EC407A"   # REKT ロング   — same pink
 C_OI_UP  = "#64B5F6"   # 推定OI 新規  — light blue (original's OI 新規)
 C_OI_DN  = "#BA68C8"   # 推定OI 解消  — light purple (original's OI 精算)
-BAR_ALPHA = 0.85
-OI_ALPHA  = 0.65
+BAR_ALPHA = 0.92        # slightly higher than dark theme for solid look on white
+OI_ALPHA  = 0.70
 
 
 def setup_logging() -> None:
@@ -299,23 +299,25 @@ def build_chart(
     ax.axvline(0, color=GRID, linewidth=0.8)
 
     # ---- Y limits ----
-    # When the caller explicitly configured the range (asymmetric, or either
-    # _UP/_DOWN env set), show the full configured window. Otherwise auto-fit
-    # to data + pad for the tighter default-3% view.
-    if asymmetric or explicit_range:
-        ylim_lo, ylim_hi = p_low, p_high
+    # Crop to where OI delta has been detected (primary), with fallback to
+    # Vol+REKT activity if OI data is absent, and full configured range as
+    # the last resort. User request: only show the band where OI is detected.
+    oi_activity = oi_up + oi_dn
+    nonzero = np.where(oi_activity > 0)[0]
+    if not len(nonzero):
+        # Fallback: any trade or liq activity
+        fallback = total_vol_per_bin + liq_short + liq_long
+        nonzero = np.where(fallback > 0)[0]
+    if len(nonzero):
+        data_lo = float(centers[nonzero[0]])
+        data_hi = float(centers[nonzero[-1]])
+        span = max(data_hi - data_lo, mark * 0.005)
+        pad = span * 0.04
+        # Always include mark price in the visible window
+        ylim_lo = max(p_low, min(data_lo, mark) - pad)
+        ylim_hi = min(p_high, max(data_hi, mark) + pad)
     else:
-        activity = total_vol_per_bin + liq_short + liq_long
-        nonzero = np.where(activity > 0)[0]
-        if len(nonzero):
-            data_lo = float(centers[nonzero[0]])
-            data_hi = float(centers[nonzero[-1]])
-            span = max(data_hi - data_lo, mark * 0.004)
-            pad = span * 0.06
-            ylim_lo = max(p_low, min(data_lo, mark) - pad)
-            ylim_hi = min(p_high, max(data_hi, mark) + pad)
-        else:
-            ylim_lo, ylim_hi = p_low, p_high
+        ylim_lo, ylim_hi = p_low, p_high
     ax.set_ylim(ylim_lo, ylim_hi)
 
     max_abs = max(
