@@ -30,22 +30,24 @@ log = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
-# ---- TradingView dark palette ------------------------------------------------
-BG       = "#131722"   # canvas
+# ---- Palette: original BitMEX-style image colors on a dark canvas ------------
+# Each layer pair (buy / sell side) shares one color — left / right position
+# carries the directional information, like the original chart.
+BG       = "#131722"   # dark canvas (X / TV dark theme)
 FG       = "#D1D4DC"   # primary text
 DIM      = "#787B86"   # secondary text / ticks
 GRID     = "#1E222D"   # grid / spines (barely visible)
-MARK     = "#FFFFFF"   # mark price line (white)
+MARK     = "#00E676"   # mark price line — green (original-style)
 POC      = "#FFFFFF"   # Point of Control marker
 
-C_BUY    = "#26A69A"   # TV green (taker buys)
-C_SELL   = "#EF5350"   # TV red   (taker sells)
-C_LIQ_S  = "#5DADE2"   # short-liq accent (cool blue, buy-side)
-C_LIQ_L  = "#F5B041"   # long-liq accent  (warm amber, sell-side)
-C_OI_UP  = "#8EBE9B"   # est. OI new — pale green
-C_OI_DN  = "#BE8E97"   # est. OI close — pale rose
+C_BUY    = "#FFC107"   # Trade 買い  — yellow/amber
+C_SELL   = "#FFC107"   # Trade 売り  — same yellow (left/right separation)
+C_LIQ_S  = "#EC407A"   # REKT ショート — pink (original's REKT 精算)
+C_LIQ_L  = "#EC407A"   # REKT ロング   — same pink
+C_OI_UP  = "#64B5F6"   # 推定OI 新規  — light blue (original's OI 新規)
+C_OI_DN  = "#BA68C8"   # 推定OI 解消  — light purple (original's OI 精算)
 BAR_ALPHA = 0.85
-OI_ALPHA  = 0.55
+OI_ALPHA  = 0.65
 
 
 def setup_logging() -> None:
@@ -134,7 +136,7 @@ def build_chart(
     range_pct: float = 3.0,
     range_pct_up: float | None = None,
     range_pct_down: float | None = None,
-    n_bins: int = 80,
+    n_bins: int = 150,
 ) -> dict:
     """Generate the chart and write to output_path. Returns a metadata dict.
 
@@ -239,15 +241,15 @@ def build_chart(
     ax = fig.add_axes([0.10, 0.07, 0.76, 0.78])
     ax.set_facecolor(BG)  # no contrast box — flat canvas like TV
 
-    bar_h = (bins[1] - bins[0]) * 0.78  # slight gap between bars
+    bar_h = (bins[1] - bins[0]) * 0.55  # slim bars, original-image style
 
     # ---- OI delta layer (estimated) — drawn first / behind, hatched ----
     # Scale: the dOI magnitudes are typically much smaller than trade volume
     # (a few hundred BTC vs tens of thousands). Show on a separate scale by
     # placing as a thin outer fringe BEYOND the vol bars in axes-fraction.
     # Approach: use a half-height bar to the OUTSIDE of buy/sell volume.
-    oi_bar_h = bar_h * 0.40
-    oi_offset_y = bar_h * 0.30  # slight vertical offset so layers are distinguishable
+    oi_bar_h = bar_h * 0.55
+    oi_offset_y = bar_h * 0.0   # no offset — keep slim bars aligned at the bin center
     if oi_up.max() > 0 or oi_dn.max() > 0:
         # Normalize OI delta to ~30% of the volume xlim for visual readability
         vol_max = max(float((vol_buy + liq_short).max() if len(vol_buy) else 1),
@@ -274,7 +276,7 @@ def build_chart(
             edgecolor="none", label="Trade 売り")
 
     # Liquidations — inner marker thin bars overlaid on top of vol bars
-    inner_h = bar_h * 0.45
+    inner_h = bar_h * 0.55
     ax.barh(centers,  liq_short, height=inner_h, left=vol_buy,
             color=C_LIQ_S, alpha=0.95, edgecolor="none", label="REKT ショート")
     ax.barh(centers, -liq_long,  height=inner_h, left=-vol_sell,
