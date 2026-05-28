@@ -152,7 +152,7 @@ def main() -> int:
     state_file = Path(os.getenv("STATE_FILE", project_dir / ".last_posted.json")).resolve()
     template = os.getenv(
         "POST_TEMPLATE",
-        "【BTC Perp · 24h】 Mark {mark}\n"
+        "【BTC価格帯別OIマップ】 Mark {mark}\n"
         "\n"
         "Vol  買 {vol_buy} / 売 {vol_sell} BTC\n"
         "Liq  S {liq_short} / L {liq_long} BTC\n"

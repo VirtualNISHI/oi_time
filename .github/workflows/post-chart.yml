@@ -95,7 +95,7 @@ jobs:
           # Drop both _UP and _DOWN to return to the default 3% auto-fitted view.
           CHART_RANGE_PCT_UP: "7"
           CHART_RANGE_PCT_DOWN: "7"
-          POST_TEMPLATE: "【BTC Perp · 24h】 Mark {mark}\n\nVol  買 {vol_buy} / 売 {vol_sell} BTC\nLiq  S {liq_short} / L {liq_long} BTC\nOI   {oi} BTC ({oi_chg})\n\n{commentary}\n\n{timestamp} JST  #BTC #Bitcoin"
+          POST_TEMPLATE: "【BTC価格帯別OIマップ】 Mark {mark}\n\nVol  買 {vol_buy} / 売 {vol_sell} BTC\nLiq  S {liq_short} / L {liq_long} BTC\nOI   {oi} BTC ({oi_chg})\n\n{commentary}\n\n{timestamp} JST  #BTC #Bitcoin"
           # X gating:
           # During the +10% range trial (2026-05-20–) scheduled runs are
           # Discord-only. Manual runs can still opt-in to X via inputs.enable_x.

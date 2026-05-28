@@ -379,8 +379,8 @@ def build_chart(
     else:
         window_label = f"Last {int(lookback_hours)}h"
     fig.text(
-        0.10, 0.955, "BTC PERP  ·  出来高プロファイル & 清算ヒートマップ",
-        color=FG, fontsize=13, fontweight="bold", ha="left",
+        0.10, 0.955, "BTC価格帯別OIマップ",
+        color=FG, fontsize=14, fontweight="bold", ha="left",
     )
     fig.text(
         0.10, 0.932,
