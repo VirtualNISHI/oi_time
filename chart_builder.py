@@ -30,24 +30,30 @@ log = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
-# ---- Palette: light-theme, original BitMEX-image style -----------------------
-# Each layer pair (buy / sell side) shares one color — left / right position
-# carries the directional information, like the original chart.
-BG       = "#FFFFFF"   # light canvas (matches original image)
+# ---- Palette: light theme, long-vs-short color split -------------------------
+# Long-favorable (right side) = green family
+# Short-favorable (left side) = red family
+# Layer is conveyed within each family by saturation (Trade=vivid, REKT=bright
+# accent, OI delta=light hatched).
+BG       = "#FFFFFF"   # light canvas
 FG       = "#1A1A1A"   # primary text  (near-black)
 DIM      = "#555555"   # secondary text / ticks
 GRID     = "#E8E8E8"   # grid / spines (very faint)
-MARK     = "#00C853"   # mark price line — green (original-style, deeper for white bg)
+MARK     = "#1565C0"   # mark price line — dark blue (neutral vs long/short colors)
 POC      = "#1A1A1A"   # POC marker / current-price label header — dark on white
 
-C_BUY    = "#FFC107"   # Trade 買い  — yellow/amber
-C_SELL   = "#FFC107"   # Trade 売り  — same yellow (left/right separation)
-C_LIQ_S  = "#EC407A"   # REKT ショート — pink (original's REKT 精算)
-C_LIQ_L  = "#EC407A"   # REKT ロング   — same pink
-C_OI_UP  = "#64B5F6"   # 推定OI 新規  — light blue (original's OI 新規)
-C_OI_DN  = "#BA68C8"   # 推定OI 解消  — light purple (original's OI 精算)
-BAR_ALPHA = 0.92        # slightly higher than dark theme for solid look on white
-OI_ALPHA  = 0.70
+# Long side (drawn on the right)
+C_BUY    = "#26A69A"   # Trade 買い      — teal-green (solid)
+C_LIQ_S  = "#00E676"   # REKT ショート   — bright lime (long-favor accent)
+C_OI_UP  = "#A5D6A7"   # 推定OI 新規    — light green (hatched, faded)
+
+# Short side (drawn on the left)
+C_SELL   = "#EF5350"   # Trade 売り      — red (solid)
+C_LIQ_L  = "#FF1744"   # REKT ロング     — bright red (short-favor accent)
+C_OI_DN  = "#FFCDD2"   # 推定OI 解消    — light pink (hatched, faded)
+
+BAR_ALPHA = 0.92
+OI_ALPHA  = 0.75
 
 
 def setup_logging() -> None:
