@@ -160,7 +160,8 @@ def main() -> int:
         "\n"
         "{commentary}\n"
         "\n"
-        "{timestamp} JST  #BTC #Bitcoin",
+        "{timestamp} JST  #BTC #Bitcoin\n"
+        "※OIはAIが収集したもので推定となります",
     )
     lookback_hours = args.lookback_hours if args.lookback_hours is not None else float(
         os.getenv("CHART_LOOKBACK_HOURS", "24"))
