@@ -39,7 +39,7 @@ BG       = "#131722"   # dark canvas (X / TV dark theme)
 FG       = "#D1D4DC"   # primary text  (near-white)
 DIM      = "#787B86"   # secondary text / ticks
 GRID     = "#2A2E39"   # grid / spines (subtle on dark)
-MARK     = "#42A5F5"   # mark price line — bright blue (neutral vs long/short colors)
+MARK     = "#FFF176"   # mark price line — light yellow (pops on dark, neutral vs long/short)
 POC      = "#FFFFFF"   # POC marker / current-price label header — white on dark
 
 # Long side (drawn on the right)
