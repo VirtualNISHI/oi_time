@@ -1,24 +1,30 @@
-"""Japanese market-commentary orchestrator with provider fallback.
+"""Japanese market-commentary using the shared jp_translator chain.
 
-Provider order (default): gemini → grok → openai → deepl.
-Override with COMMENTARY_PROVIDERS env var (comma-separated, in priority order).
+歴史的経緯で gemini/grok/openai/deepl 各 commentary.py を独自に持っていたが、
+共有モジュール ``jp_translator`` に統合 (Gemini → OpenAI → Grok → DeepL の
+フォールバックチェーンと reasoning モデル自動補正を一括で享受)。
 
-Each provider module must expose `generate_commentary(meta) -> str | None`.
-A None / empty return is treated as "skip and try the next provider".
-
-Shared helpers (system prompt, user prompt formatter, post-processing) live here
-so each provider module is just an SDK adapter.
+このファイルは BOT 固有の SYSTEM_PROMPT / format_user_prompt / clean_output
+だけを保持し、provider 呼び出しは共有モジュールに委譲する。
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Callable
+import sys
+from pathlib import Path
+
+# oi_time は `python -m commentary` / `python commentary.py` の双方で動くため、
+# vendored ``jp_translator/`` がプロジェクトルートに置かれている前提で path を通す。
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from jp_translator import generate  # noqa: E402
+from jp_translator.providers import deepl_translate  # noqa: E402
 
 log = logging.getLogger(__name__)
-
-DEFAULT_ORDER: tuple[str, ...] = ("gemini", "grok", "openai", "deepl")
 
 SYSTEM_PROMPT = """あなたはBTC無期限先物の市況コメンテーターです。
 入力データ（直近24hのVolume Profile/清算/OI統計）を見て、日本語で30〜60文字の
@@ -62,7 +68,11 @@ def format_user_prompt(meta: dict) -> str:
 
 
 def format_english_summary(meta: dict) -> str:
-    """Deterministic English summary used as the DeepL translate source."""
+    """Deterministic English summary used as the DeepL translate source.
+
+    LLM 3 段 (Gemini/OpenAI/Grok) が全部失敗したときの最終フォールバック用に、
+    決定的な英文を組み立てて DeepL で日本語化する。
+    """
     mark = meta.get("mark", 0)
     lookback = int(meta.get("lookback_hours", 24))
     vb = meta.get("total_vol_buy_btc", 0)
@@ -95,7 +105,6 @@ def clean_output(text: str | None) -> str | None:
     if not text:
         return None
     text = text.replace("\n", " ").strip()
-    # Strip a single layer of ASCII / JP quotes if model wrapped the line
     for left, right in (('"', '"'), ("'", "'"), ("「", "」"), ("『", "』")):
         if text.startswith(left) and text.endswith(right):
             text = text[len(left):-len(right)].strip()
@@ -103,60 +112,42 @@ def clean_output(text: str | None) -> str | None:
     return text or None
 
 
-def _resolve_order() -> tuple[str, ...]:
-    raw = (os.getenv("COMMENTARY_PROVIDERS") or "").strip()
-    if not raw:
-        return DEFAULT_ORDER
-    return tuple(p.strip().lower() for p in raw.split(",") if p.strip())
-
-
-def _load_provider(name: str) -> Callable[[dict], str | None] | None:
-    """Lazy-import a provider's generate_commentary, or None if module missing."""
-    modules = {
-        "gemini": "gemini_commentary",
-        "grok": "grok_commentary",
-        "openai": "openai_commentary",
-        "deepl": "deepl_commentary",
-    }
-    mod_name = modules.get(name)
-    if mod_name is None:
-        log.warning("commentary: unknown provider %r", name)
-        return None
-    try:
-        mod = __import__(mod_name)
-    except ImportError as e:
-        log.warning("commentary: import %s failed: %s", mod_name, e)
-        return None
-    fn = getattr(mod, "generate_commentary", None)
-    if fn is None:
-        log.warning("commentary: %s has no generate_commentary()", mod_name)
-        return None
-    return fn
-
-
 def generate_commentary(meta: dict) -> str | None:
-    """Run providers in priority order, return the first non-empty result."""
-    for name in _resolve_order():
-        fn = _load_provider(name)
-        if fn is None:
-            continue
-        try:
-            text = fn(meta)
-        except Exception as e:  # noqa: BLE001
-            log.warning("commentary: %s raised: %s", name, e)
-            continue
-        text = clean_output(text)
-        if text:
-            log.info("commentary: %s succeeded (%d chars)", name, len(text))
-            return text
-        log.info("commentary: %s returned empty, trying next", name)
+    """共有モジュール経由でコメントを生成。失敗時 None。
+
+    試行順:
+      1. ``jp_translator.generate`` (Gemini → OpenAI → Grok)
+      2. それでもダメなら ``format_english_summary`` を DeepL で訳す
+      3. 全段失敗 → None
+    """
+    # Tier 1〜3: LLM チェーン (Gemini → OpenAI → Grok)
+    text = generate(
+        system=SYSTEM_PROMPT,
+        user=format_user_prompt(meta),
+        max_tokens=400,
+        temperature=0.3,
+    )
+    cleaned = clean_output(text)
+    if cleaned:
+        log.info("commentary: LLM chain succeeded (%d chars)", len(cleaned))
+        return cleaned
+
+    # Tier 4: DeepL on deterministic English summary
+    deepl_key = os.getenv("DEEPL_API_KEY", "").strip()
+    if deepl_key:
+        en = format_english_summary(meta)
+        translated = deepl_translate(en, api_key=deepl_key, source_lang="EN", target_lang="JA")
+        cleaned = clean_output(translated)
+        if cleaned:
+            log.info("commentary: DeepL fallback (%d chars)", len(cleaned))
+            return cleaned
+
     log.info("commentary: all providers exhausted, returning None")
     return None
 
 
 if __name__ == "__main__":
     import json
-    import sys
 
     from dotenv import load_dotenv
 

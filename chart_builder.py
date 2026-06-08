@@ -30,27 +30,27 @@ log = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
-# ---- Palette: light theme, long-vs-short color split -------------------------
+# ---- Palette: dark theme, long-vs-short color split --------------------------
 # Long-favorable (right side) = green family
 # Short-favorable (left side) = red family
 # Layer is conveyed within each family by saturation (Trade=vivid, REKT=bright
 # accent, OI delta=light hatched).
-BG       = "#FFFFFF"   # light canvas
-FG       = "#1A1A1A"   # primary text  (near-black)
-DIM      = "#555555"   # secondary text / ticks
-GRID     = "#E8E8E8"   # grid / spines (very faint)
-MARK     = "#1565C0"   # mark price line — dark blue (neutral vs long/short colors)
-POC      = "#1A1A1A"   # POC marker / current-price label header — dark on white
+BG       = "#131722"   # dark canvas (X / TV dark theme)
+FG       = "#D1D4DC"   # primary text  (near-white)
+DIM      = "#787B86"   # secondary text / ticks
+GRID     = "#2A2E39"   # grid / spines (subtle on dark)
+MARK     = "#42A5F5"   # mark price line — bright blue (neutral vs long/short colors)
+POC      = "#FFFFFF"   # POC marker / current-price label header — white on dark
 
 # Long side (drawn on the right)
 C_BUY    = "#26A69A"   # Trade 買い      — teal-green (solid)
 C_LIQ_S  = "#00E676"   # REKT ショート   — bright lime (long-favor accent)
-C_OI_UP  = "#A5D6A7"   # 推定OI 新規    — light green (hatched, faded)
+C_OI_UP  = "#66BB6A"   # 推定OI 新規    — green (hatched, a bit brighter for dark bg)
 
 # Short side (drawn on the left)
 C_SELL   = "#EF5350"   # Trade 売り      — red (solid)
 C_LIQ_L  = "#FF1744"   # REKT ロング     — bright red (short-favor accent)
-C_OI_DN  = "#FFCDD2"   # 推定OI 解消    — light pink (hatched, faded)
+C_OI_DN  = "#EF9A9A"   # 推定OI 解消    — rose-pink (hatched, visible on dark bg)
 
 BAR_ALPHA = 0.92
 OI_ALPHA  = 0.75
