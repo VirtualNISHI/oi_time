@@ -8,6 +8,28 @@ on:
     # 上記時刻はトップオブアワー回避のため +10min。
     # X API Free枠: 17 tweets/24h, 500/month — 4/day, 120/month で余裕。
     - cron: "10 0,6,12,18 * * *"
+
+    # --- FOMC dense windows (X only) ---------------------------------------
+    # 政策金利発表 (2:00 PM ET) 前後を 30分毎に増量投稿 (発表 -30min 〜 +120min,
+    # 計6投稿/回)。発表は EDT 期=18:00 UTC / EST 期(1月・12月)=19:00 UTC。
+    # cron は両方を含む 17:00–21:30 UTC を 30分毎に発火させ、実際の投稿可否は
+    # fomc_schedule.py の正確な窓判定 (--require-fomc-window) に委ねる。
+    # → 窓外の発火は post_chart.py が即 return 0 で no-op。
+    # 投稿先は X のみ (このジョブで --skip-discord を付与)。
+    # FOMC 日の X は base4 + dense6 = 約10/日 → 無料枠17/日に収まる。
+    #
+    # ⚠ 毎年更新: Fed が翌年のカレンダーを公表したら下記日付と
+    #   fomc_schedule.py の FOMC_ANNOUNCEMENTS_UTC を差し替えること。
+    #   2026: Jan28 / Mar18 / Apr29 / Jun17 / Jul29 / Sep16 / Oct28 / Dec9
+    #   (万一 月日が翌年も一致して発火しても、年が違えば窓判定で弾かれる)
+    - cron: "0,30 17-21 28 1 *"    # Jan 28, 2026
+    - cron: "0,30 17-21 18 3 *"    # Mar 18, 2026
+    - cron: "0,30 17-21 29 4 *"    # Apr 29, 2026
+    - cron: "0,30 17-21 17 6 *"    # Jun 17, 2026
+    - cron: "0,30 17-21 29 7 *"    # Jul 29, 2026
+    - cron: "0,30 17-21 16 9 *"    # Sep 16, 2026
+    - cron: "0,30 17-21 28 10 *"   # Oct 28, 2026
+    - cron: "0,30 17-21 9 12 *"    # Dec 9, 2026
   workflow_dispatch:
     inputs:
       enable_x:
@@ -100,11 +122,20 @@ jobs:
           # Scheduled runs post to X (user-approved 2026-05-28, 6h cadence).
           # Manual runs require inputs.enable_x to be explicitly true.
           ENABLE_X: ${{ github.event_name == 'schedule' && 'true' || (inputs.enable_x && 'true' || 'false') }}
+          # FOMC dense mode: true when triggered by any schedule OTHER than the
+          # base 6h cron (i.e. one of the FOMC 30-min crons). github.event.schedule
+          # is the exact cron string that fired this run.
+          FOMC_DENSE: ${{ github.event_name == 'schedule' && github.event.schedule != '10 0,6,12,18 * * *' && 'true' || 'false' }}
         run: |
           ARGS=""
           if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           if [ "${{ inputs.skip_discord }}" = "true" ]; then ARGS="$ARGS --skip-discord"; fi
+          if [ "$FOMC_DENSE" = "true" ]; then
+            # FOMC dense window → X only, gated to the actual announcement window.
+            echo "FOMC dense schedule fired (${{ github.event.schedule }}) — X only, window-gated"
+            ARGS="$ARGS --skip-discord --require-fomc-window"
+          fi
           python post_chart.py $ARGS
 
       - name: Save state to bot-state branch

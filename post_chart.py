@@ -139,6 +139,11 @@ def main() -> int:
                         help="Skip X. Note: X is also gated by ENABLE_X=true in .env.")
     parser.add_argument("--enable-x", action="store_true",
                         help="One-shot override of ENABLE_X gate (must still pass --skip-x absence).")
+    parser.add_argument("--require-fomc-window", action="store_true",
+                        help="Only proceed if now is inside a FOMC announcement window "
+                             "(see fomc_schedule.py). Used by the dense FOMC cron so the "
+                             "date-targeted schedule can't post outside the window or in a "
+                             "later year. Also settable via REQUIRE_FOMC_WINDOW=true.")
     # Chart params (override .env)
     parser.add_argument("--lookback-hours", type=float)
     parser.add_argument("--range-pct", type=float)
@@ -147,6 +152,26 @@ def main() -> int:
     setup_logging()
     project_dir = Path(__file__).parent
     load_dotenv(project_dir / ".env")
+
+    # FOMC dense-window gate. When enabled, bail out (success, no post) unless
+    # now is inside a FOMC announcement window. This lets the workflow schedule
+    # a 30-min cron on the FOMC calendar dates while the authoritative window
+    # check lives in fomc_schedule.py — which also stops the date-targeted cron
+    # from posting in a later year. Checked before any API calls so skipped
+    # runs are free.
+    require_fomc = args.require_fomc_window or os.getenv(
+        "REQUIRE_FOMC_WINDOW", "false").lower() in ("1", "true", "yes")
+    if require_fomc:
+        try:
+            from fomc_schedule import active_announcement
+        except Exception as e:
+            log.error("FOMC gate requested but fomc_schedule import failed: %s", e)
+            return 1
+        ann = active_announcement(datetime.now(timezone.utc))
+        if ann is None:
+            log.info("REQUIRE_FOMC_WINDOW set and now is outside every FOMC window - skipping")
+            return 0
+        log.info("FOMC window active (announcement %s) - dense post proceeding", ann.isoformat())
 
     images_dir = Path(os.getenv("IMAGES_DIR", project_dir / "images")).resolve()
     state_file = Path(os.getenv("STATE_FILE", project_dir / ".last_posted.json")).resolve()
