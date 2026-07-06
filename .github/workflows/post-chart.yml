@@ -10,26 +10,37 @@ on:
     - cron: "10 0,6,12,18 * * *"
 
     # --- FOMC dense windows (X only) ---------------------------------------
-    # 政策金利発表 (2:00 PM ET) 前後を 30分毎に増量投稿 (発表 -30min 〜 +120min,
-    # 計6投稿/回)。発表は EDT 期=18:00 UTC / EST 期(1月・12月)=19:00 UTC。
-    # cron は両方を含む 17:00–21:30 UTC を 30分毎に発火させ、実際の投稿可否は
-    # fomc_schedule.py の正確な窓判定 (--require-fomc-window) に委ねる。
+    # 政策金利発表 (2:00 PM ET) 前後を密に増量投稿 (発表 -30min 〜 +130min の間で
+    # 実質30分毎、計6投稿/回)。発表は EDT 期=18:00 UTC / EST 期(1月・12月)=19:00 UTC。
+    #
+    # 2026-06-17 の実運用で判明した問題と対策:
+    #   1) cron を毎時 :00/:30 に置くと GitHub Actions 側の混雑 (GH公式ドキュメント
+    #      が「毎時0分・30分は最も遅延しやすい」と明記) で数十分〜1時間超の発火遅延
+    #      が発生した。→ :05/:35 にずらして混雑時間帯を回避。
+    #   2) tweepy.Client (X API v2) がタイムアウト未設定で無期限ハングし、1件の
+    #      投稿がジョブの timeout-minutes 一杯まで張り付いた。concurrency グループ
+    #      が直列実行のため、後続の全トリガーがその分後ろ倒しになった。
+    #      → post_chart.py 側で明示的な timeout を設定済み (post_to_x)。
+    #   3) 常に窓の外側になる時間帯 (旧: hour 21 全体) を削り、無駄な発火を削減。
+    # 発火時刻 (:05,:35 を hour 17-20 or 18-21 に展開) は実際の投稿可否判定に使わず、
+    # fomc_schedule.py の連続的な窓判定 (--require-fomc-window) に委ねる。
     # → 窓外の発火は post_chart.py が即 return 0 で no-op。
     # 投稿先は X のみ (このジョブで --skip-discord を付与)。
     # FOMC 日の X は base4 + dense6 = 約10/日 → 無料枠17/日に収まる。
     #
     # ⚠ 毎年更新: Fed が翌年のカレンダーを公表したら下記日付と
     #   fomc_schedule.py の FOMC_ANNOUNCEMENTS_UTC を差し替えること。
-    #   2026: Jan28 / Mar18 / Apr29 / Jun17 / Jul29 / Sep16 / Oct28 / Dec9
+    #   2026: Jan28(EST) / Mar18(EDT) / Apr29(EDT) / Jun17(EDT) / Jul29(EDT) /
+    #         Sep16(EDT) / Oct28(EDT) / Dec9(EST)
     #   (万一 月日が翌年も一致して発火しても、年が違えば窓判定で弾かれる)
-    - cron: "0,30 17-21 28 1 *"    # Jan 28, 2026
-    - cron: "0,30 17-21 18 3 *"    # Mar 18, 2026
-    - cron: "0,30 17-21 29 4 *"    # Apr 29, 2026
-    - cron: "0,30 17-21 17 6 *"    # Jun 17, 2026
-    - cron: "0,30 17-21 29 7 *"    # Jul 29, 2026
-    - cron: "0,30 17-21 16 9 *"    # Sep 16, 2026
-    - cron: "0,30 17-21 28 10 *"   # Oct 28, 2026
-    - cron: "0,30 17-21 9 12 *"    # Dec 9, 2026
+    - cron: "5,35 18-21 28 1 *"    # Jan 28, 2026 (EST, announce 19:00 UTC)
+    - cron: "5,35 17-20 18 3 *"    # Mar 18, 2026 (EDT, announce 18:00 UTC)
+    - cron: "5,35 17-20 29 4 *"    # Apr 29, 2026 (EDT)
+    - cron: "5,35 17-20 17 6 *"    # Jun 17, 2026 (EDT)
+    - cron: "5,35 17-20 29 7 *"    # Jul 29, 2026 (EDT)
+    - cron: "5,35 17-20 16 9 *"    # Sep 16, 2026 (EDT)
+    - cron: "5,35 17-20 28 10 *"   # Oct 28, 2026 (EDT)
+    - cron: "5,35 18-21 9 12 *"    # Dec 9, 2026 (EST, announce 19:00 UTC)
   workflow_dispatch:
     inputs:
       enable_x:
@@ -63,7 +74,10 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 -> 20: extra headroom so one slow run doesn't eat the whole budget.
+    # Combined with the tweepy session timeout fix, a stuck run should now
+    # fail fast well inside this instead of riding it out to the limit.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout

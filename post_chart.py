@@ -72,12 +72,30 @@ def post_to_discord(webhook_url: str, image_path: Path, text: str) -> None:
     log.info("Discord posted: status=%s", r.status_code)
 
 
+class _TimeoutSession(requests.Session):
+    """requests.Session that enforces a default timeout on every call.
+
+    tweepy.Client (X API v2) builds a plain requests.Session internally and
+    never passes a timeout to it, so a stalled connection hangs forever —
+    the only thing that eventually kills it is the GitHub Actions job
+    timeout. Observed 2026-06-17: a run sat for the full 15-minute job
+    timeout, and because the workflow's concurrency group serializes runs,
+    every later-queued FOMC dense-window trigger that day was delayed
+    behind it. tweepy.API already defaults to timeout=60; this makes both
+    clients bounded.
+    """
+
+    def request(self, *args, **kwargs):
+        kwargs.setdefault("timeout", 30)
+        return super().request(*args, **kwargs)
+
+
 def post_to_x(creds: dict, image_path: Path, text: str) -> None:
     auth = tweepy.OAuth1UserHandler(
         creds["api_key"], creds["api_secret"],
         creds["access_token"], creds["access_token_secret"],
     )
-    api_v1 = tweepy.API(auth)
+    api_v1 = tweepy.API(auth, timeout=30)
     media = api_v1.media_upload(filename=str(image_path))
 
     client = tweepy.Client(
@@ -86,6 +104,7 @@ def post_to_x(creds: dict, image_path: Path, text: str) -> None:
         access_token=creds["access_token"],
         access_token_secret=creds["access_token_secret"],
     )
+    client.session = _TimeoutSession()
     resp = client.create_tweet(text=text, media_ids=[media.media_id])
     tweet_id = resp.data.get("id") if resp.data else None
     log.info("X posted: tweet_id=%s", tweet_id)

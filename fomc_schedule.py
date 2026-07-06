@@ -39,11 +39,13 @@ FOMC_ANNOUNCEMENTS_UTC: tuple[datetime, ...] = (
 )
 
 # Dense-posting window relative to the announcement instant.
-# 30 min before → 120 min after, sampled every 30 min by the cron, yields
-# 6 posts: T-30, T+0, T+30, T+60, T+90, T+120. Covers the announcement and
-# the bulk of the 2:30 PM ET press conference.
+# The workflow's cron fires at :05/:35 past the hour (not :00/:30 — GitHub
+# Actions documents :00/:30 as its most congested, most-delayed times), so
+# actual posts land at T-25, T+5, T+35, T+65, T+95, T+125. WINDOW_AFTER must
+# cover the last of those (125 min) with a little slack for residual GH
+# Actions scheduling delay.
 WINDOW_BEFORE = timedelta(minutes=30)
-WINDOW_AFTER = timedelta(minutes=120)
+WINDOW_AFTER = timedelta(minutes=130)
 
 
 def active_announcement(now: datetime | None = None) -> datetime | None:
